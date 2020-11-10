@@ -15,6 +15,7 @@ make assumptions about execution order.
 """
 from decimal import Decimal
 import io
+import time
 
 from test_framework.blocktools import add_witness_commitment, create_block, create_coinbase, send_to_witness
 from test_framework.messages import BIP125_SEQUENCE_NUMBER, CTransaction
@@ -70,6 +71,9 @@ class BumpFeeTest(BitcoinTestFramework):
 
         self.log.info("Running tests")
         dest_address = peer_node.getnewaddress()
+        test_settxfee(rbf_node, dest_address)
+        return
+
         test_simple_bumpfee_succeeds(self, "default", rbf_node, peer_node, dest_address)
         test_simple_bumpfee_succeeds(self, "fee_rate", rbf_node, peer_node, dest_address)
         test_feerate_args(self, rbf_node, peer_node, dest_address)
@@ -267,6 +271,12 @@ def test_settxfee(rbf_node, dest_address):
     rbf_node.settxfee(requested_feerate)
     bumped_tx = rbf_node.bumpfee(rbfid)
     actual_feerate = bumped_tx["fee"] * 1000 / rbf_node.getrawtransaction(bumped_tx["txid"], True)["vsize"]
+
+    actual_fee = bumped_tx["fee"]
+    requested_fee = requested_feerate * rbf_node.getrawtransaction(bumped_tx["txid"], True)["vsize"] / 1000
+    print ("reques ", requested_fee)
+    print ("actual ", actual_fee)
+    print ("  diff ", requested_fee - actual_fee)
     # Assert that the difference between the requested feerate and the actual
     # feerate of the bumped transaction is small.
     assert_greater_than(Decimal("0.00001000"), abs(requested_feerate - actual_feerate))

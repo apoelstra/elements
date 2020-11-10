@@ -2944,6 +2944,7 @@ bool CWallet::CreateTransaction(interfaces::Chain::Lock& locked_chain, const std
             // Start with no fee and loop until there is enough fee
             while (true)
             {
+//         WalletLogPrintf("ENTER CreateTransaction loop\n");
                 if (blind_details) {
                     // Clear out previous blinding/data info as needed
                     resetBlindDetails(blind_details);
@@ -2952,6 +2953,7 @@ bool CWallet::CreateTransaction(interfaces::Chain::Lock& locked_chain, const std
                 // We need to output the position of the policyAsset change output.
                 // So we keep track of the change position of all assets
                 // individually and set the export variable in the end.
+        // WalletLogPrintf("ENTER CreateTransaction loop\n");
                 vChangePosInOut.clear();
                 if (nChangePosRequest >= 0) {
                     vChangePosInOut[::policyAsset] = nChangePosRequest;
@@ -2962,6 +2964,7 @@ bool CWallet::CreateTransaction(interfaces::Chain::Lock& locked_chain, const std
                 txNew.witness.SetNull();
                 bool fFirst = true;
 
+        // WalletLogPrintf("ENTER CreateTransaction loop\n");
                 CAmountMap mapValueToSelect = mapValue;
                 if (nSubtractFeeFromAmount == 0)
                     mapValueToSelect[::policyAsset] += nFeeRet;
@@ -3022,6 +3025,7 @@ bool CWallet::CreateTransaction(interfaces::Chain::Lock& locked_chain, const std
                     }
                 }
 
+ //        WalletLogPrintf("ENTER CreateTransaction loop\n");
                 // Choose coins to use
                 bool bnb_used;
                 if (pick_new_inputs) {
@@ -3074,6 +3078,7 @@ bool CWallet::CreateTransaction(interfaces::Chain::Lock& locked_chain, const std
                     // The nChange when BnB is used is always going to go to fees.
                     if (assetChange.first == policyAsset && (IsDust(newTxOut, discard_rate) || bnb_used || bnb_was_used))
                     {
+            WalletLogPrintf("Dumping %i into fee from change\n", assetChange.second);
                         vChangePosInOut.erase(assetChange.first);
                         nFeeRet += assetChange.second;
                     }
@@ -3114,6 +3119,7 @@ bool CWallet::CreateTransaction(interfaces::Chain::Lock& locked_chain, const std
                         txNew.vout.insert(position, newTxOut);
                     }
                 }
+        // WalletLogPrintf("ENTER CreateTransaction loop\n");
                 bnb_was_used = bnb_used; // Record this for the next iteration
                 // Set the correct nChangePosInOut for output.  Should be policyAsset's position.
                 std::map<CAsset, int>::const_iterator itPos = vChangePosInOut.find(::policyAsset);
