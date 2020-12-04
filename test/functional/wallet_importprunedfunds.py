@@ -6,7 +6,6 @@
 from decimal import Decimal
 
 from test_framework import liquid_addr
-from test_framework.address import key_to_p2wpkh
 from test_framework.key import ECKey
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.script import hash160

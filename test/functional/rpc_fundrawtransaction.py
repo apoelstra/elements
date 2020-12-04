@@ -611,7 +611,6 @@ class RawTransactionsTest(BitcoinTestFramework):
         outputs = {self.nodes[0].getnewaddress():0.15,self.nodes[0].getnewaddress():0.04}
         rawtx = self.nodes[1].createrawtransaction(inputs, outputs)
         fundedTx = self.nodes[1].fundrawtransaction(rawtx)
-        blindedTx = self.nodes[1].blindrawtransaction(fundedTx['hex'])
 
         # Create same transaction over sendtoaddress.
         txId = self.nodes[1].sendmany("", outputs)
