@@ -44,7 +44,7 @@ class ImportPrunedFundsTest(BitcoinTestFramework):
 
         address3_privkey = bytes_to_wif(eckey.get_bytes())
         address3_blindingkey = blinding_eckey.get_bytes().hex()
-        conf_addrdata = blinding_eckey.get_pubkey().get_bytes() + hash160(eckey.get_pubkey().get_bytes()) 
+        conf_addrdata = blinding_eckey.get_pubkey().get_bytes() + hash160(eckey.get_pubkey().get_bytes())
         address3 = liquid_addr.encode("el", 0, conf_addrdata)
         self.nodes[0].importprivkey(address3_privkey)
 
