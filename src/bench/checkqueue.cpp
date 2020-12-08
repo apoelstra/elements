@@ -56,11 +56,17 @@ static void CCheckQueueSpeedPrevectorJob(benchmark::Bench& bench)
     std::vector<std::vector<PrevectorJob*>> vBatches(BATCHES);
     for (auto& vChecks : vBatches) {
         vChecks.reserve(BATCH_SIZE);
-        for (size_t x = 0; x < BATCH_SIZE; ++x)
-            vChecks.emplace_back(new PrevectorJob(insecure_rand));
     }
 
     bench.minEpochIterations(10).batch(BATCH_SIZE * BATCHES).unit("job").run([&] {
+        // ELEMENTS: we need to allocate new jobs on every iteration, since control
+        //  will delete them. This should be fixed by restoring the original Core
+        //  logic and using std::unique_pointer to handle heap-allocated objects
+        //  when necessary, but this change was the simplest thing we could do
+        //  to get the 0.21 rebase to work.
+        for (auto& vChecks : vBatches)
+            for (size_t x = 0; x < BATCH_SIZE; ++x)
+                vChecks[x] = new PrevectorJob(insecure_rand);
         // Make insecure_rand here so that each iteration is identical.
         CCheckQueueControl<PrevectorJob> control(&queue);
         for (auto vChecks : vBatches) {

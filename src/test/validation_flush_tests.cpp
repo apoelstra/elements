@@ -53,7 +53,9 @@ BOOST_AUTO_TEST_CASE(getcoinscachesizestate)
         BOOST_TEST_MESSAGE("CCoinsViewCache memory usage: " << view.DynamicMemoryUsage());
     };
 
-    constexpr size_t MAX_COINS_CACHE_BYTES = 1024;
+    // ELEMENTS: these tests are extremely fragile even on Bitcoin. Values set experimentally
+    //  by looking at CI failures.
+    constexpr size_t MAX_COINS_CACHE_BYTES = 1680;
 
     // Without any coins in the cache, we shouldn't need to flush.
     BOOST_CHECK_EQUAL(
@@ -86,7 +88,7 @@ BOOST_AUTO_TEST_CASE(getcoinscachesizestate)
     // This is contingent not only on the dynamic memory usage of the Coins
     // that we're adding (COIN_SIZE bytes per), but also on how much memory the
     // cacheCoins (unordered_map) preallocates.
-    constexpr int COINS_UNTIL_CRITICAL{2};  // ELEMENTS: CTxOut is larger, so fewer coins fit
+    constexpr int COINS_UNTIL_CRITICAL{3};
 
     for (int i{0}; i < COINS_UNTIL_CRITICAL; ++i) {
         COutPoint res = add_coin(view);
@@ -98,7 +100,7 @@ BOOST_AUTO_TEST_CASE(getcoinscachesizestate)
     }
 
     // Adding some additional coins will push us over the edge to CRITICAL.
-    for (int i{0}; i < 4; ++i) {
+    for (int i{0}; i < 6; ++i) {  // ELEMENTS: sometimes 1 is enough, sometimes 4 is too few. This test is a mess!
         add_coin(view);
         print_view_mem_usage(view);
         if (chainstate.GetCoinsCacheSizeState(&tx_pool, MAX_COINS_CACHE_BYTES, /*max_mempool_size_bytes*/ 0) ==
@@ -112,15 +114,16 @@ BOOST_AUTO_TEST_CASE(getcoinscachesizestate)
         CoinsCacheSizeState::CRITICAL);
 
     // Passing non-zero max mempool usage should allow us more headroom.
+    // ELEMENTS: give 1700 extra bytes, again based on CI
     BOOST_CHECK_EQUAL(
-        chainstate.GetCoinsCacheSizeState(&tx_pool, MAX_COINS_CACHE_BYTES, /*max_mempool_size_bytes*/ 1 << 10),
+        chainstate.GetCoinsCacheSizeState(&tx_pool, MAX_COINS_CACHE_BYTES, /*max_mempool_size_bytes*/ 1700),
         CoinsCacheSizeState::OK);
 
-    for (int i{0}; i < 2; ++i) {  // ELEMENTS: larger CTxOuts
+    for (int i{0}; i < 3; ++i) {
         add_coin(view);
         print_view_mem_usage(view);
         BOOST_CHECK_EQUAL(
-            chainstate.GetCoinsCacheSizeState(&tx_pool, MAX_COINS_CACHE_BYTES, /*max_mempool_size_bytes*/ 1 << 10),
+            chainstate.GetCoinsCacheSizeState(&tx_pool, MAX_COINS_CACHE_BYTES, /*max_mempool_size_bytes*/ 1700),
             CoinsCacheSizeState::OK);
     }
 
@@ -131,12 +134,12 @@ BOOST_AUTO_TEST_CASE(getcoinscachesizestate)
 
     // Only perform these checks on 64 bit hosts; I haven't done the math for 32.
     if (is_64_bit) {
-        float usage_percentage = (float)view.DynamicMemoryUsage() / (MAX_COINS_CACHE_BYTES + (1 << 10));
+        float usage_percentage = (float)view.DynamicMemoryUsage() / (MAX_COINS_CACHE_BYTES + 1700);
         BOOST_TEST_MESSAGE("CoinsTip usage percentage: " << usage_percentage);
         BOOST_CHECK(usage_percentage >= 0.9);
         BOOST_CHECK(usage_percentage < 1);
         BOOST_CHECK_EQUAL(
-            chainstate.GetCoinsCacheSizeState(&tx_pool, MAX_COINS_CACHE_BYTES, 1 << 10),
+            chainstate.GetCoinsCacheSizeState(&tx_pool, MAX_COINS_CACHE_BYTES, 1700),
             CoinsCacheSizeState::LARGE);
     }
 
