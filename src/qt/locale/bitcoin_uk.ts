@@ -1038,7 +1038,7 @@ Signing is only possible with addresses of the type 'legacy'.</translation>
     </message>
     <message>
         <source>%1 will download and store a copy of the %2 block chain.</source>
-        <translation>%1 will download and store a copy of the Bitcoin block chain.</translation>
+        <translation>%1 will download and store a copy of the %2 block chain.</translation>
     </message>
     <message>
         <source>The wallet will also be stored in this directory.</source>
