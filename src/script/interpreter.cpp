@@ -1613,6 +1613,73 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                 }
                 break;
 
+                case OP_SHA256INITIALIZE: // (in -- sha256_ctx)
+                {
+                    // OP_SHA256INITIALIZE is only available in Tapscript
+                    if (sigversion == SigVersion::BASE || sigversion == SigVersion::WITNESS_V0) return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
+
+                    if (stack.size() < 1)
+                        return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+
+                    CSHA256 ctx;
+                    valtype& vch = stacktop(-1);
+                    if (!ctx.SafeWrite(vch.data(), vch.size()))
+                        return set_error(serror, SCRIPT_ERR_UNKNOWN_ERROR);
+
+                    popstack(stack);
+                    stack.push_back(ctx.Save());
+                }
+                break;
+
+                case OP_SHA256UPDATE: // (sha256_ctx in -- sha256_ctx)
+                {
+                    // OP_SHA256UPDATE is only available in Tapscript
+                    if (sigversion == SigVersion::BASE || sigversion == SigVersion::WITNESS_V0) return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
+
+                    if (stack.size() < 2)
+                        return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+
+                    CSHA256 ctx;
+                    valtype& vchCtx = stacktop(-1);
+                    if (!ctx.Load(vchCtx))
+                        return set_error(serror, SCRIPT_ERR_SHA2_CONTEXT_LOAD);
+
+                    valtype& vch = stacktop(-2);
+                    if (!ctx.SafeWrite(vch.data(), vch.size()))
+                        return set_error(serror, SCRIPT_ERR_UNKNOWN_ERROR);
+
+                    popstack(stack);
+                    popstack(stack);
+                    stack.push_back(ctx.Save());
+                }
+                break;
+
+                case OP_SHA256FINALIZE: // (sha256_ctx in -- hash)
+                {
+                    // OP_SHA256Finalize is only available in Tapscript
+                    if (sigversion == SigVersion::BASE || sigversion == SigVersion::WITNESS_V0) return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
+
+                    if (stack.size() < 2)
+                        return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+
+                    valtype& vchCtx = stacktop(-1);
+                    CSHA256 ctx;
+                    if (!ctx.Load(vchCtx))
+                        return set_error(serror, SCRIPT_ERR_SHA2_CONTEXT_LOAD);
+
+                    valtype& vch = stacktop(-2);
+                    if (!ctx.SafeWrite(vch.data(), vch.size()))
+                        return set_error(serror, SCRIPT_ERR_UNKNOWN_ERROR);
+
+                    valtype vchHash(32);
+                    ctx.Finalize(vchHash.data());
+
+                    popstack(stack);
+                    popstack(stack);
+                    stack.push_back(vchHash);
+                }
+                break;
+
                 default:
                     return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
             }

@@ -147,6 +147,10 @@ std::string GetOpName(opcodetype opcode)
     // Opcode added by BIP 342 (Tapscript)
     case OP_CHECKSIGADD            : return "OP_CHECKSIGADD";
 
+    // Elements Tapscript opcodes
+    case OP_SHA256INITIALIZE       : return "OP_SHA256INITIALIZE";
+    case OP_SHA256UPDATE           : return "OP_SHA256UPDATE";
+    case OP_SHA256FINALIZE         : return "OP_SHA256FINALIZE";
     case OP_INVALIDOPCODE          : return "OP_INVALIDOPCODE";
 
     default:
@@ -416,5 +420,6 @@ bool IsOpSuccess(const opcodetype& opcode)
             // ELEMENTS: Don't mark OP_INVERT , OP_AND, OP_OR, OP_XOR. OP_LSHIFT, OP_RSHIFT as success
            (opcode >= 141 && opcode <= 142) || (opcode >= 149 && opcode <= 151) ||
            // ELEMENTS: Exclude OP_DETERMINISTICRANDOM, OP_CHECKSIGFROMSTACK(VERIFY), OP_SUBSTRLAZY
-           (opcode >= 187 && opcode <= 191) || (opcode >= 196 && opcode <= 254);
+           // ELEMENTS: Tapscript extension till
+           (opcode >= 187 && opcode <= 191) || (opcode >= 229 && opcode <= 254);
 }

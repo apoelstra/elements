@@ -86,7 +86,11 @@ typedef enum ScriptError_t
 
     // ELEMENTS:
     SCRIPT_ERR_RANGEPROOF,
-    SCRIPT_ERR_PEDERSEN_TALLY
+    SCRIPT_ERR_PEDERSEN_TALLY,
+
+
+    /* Elements: New tapscript related errors */
+    SCRIPT_ERR_SHA2_CONTEXT_LOAD
 } ScriptError;
 
 #define SCRIPT_ERR_LAST SCRIPT_ERR_ERROR_COUNT
