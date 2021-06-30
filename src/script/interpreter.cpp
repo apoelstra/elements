@@ -11,6 +11,7 @@
 #include <pubkey.h>
 #include <script/script.h>
 #include <uint256.h>
+#include <consensus/consensus.h>
 
 typedef std::vector<unsigned char> valtype;
 
@@ -2396,6 +2397,49 @@ bool GenericTransactionSignatureChecker<T>::CheckSequence(const CScriptNum& nSeq
         return false;
 
     return true;
+}
+
+template <class T>
+unsigned int GenericTransactionSignatureChecker<T>::GetLockTime() const
+{
+    return txTo->nLockTime;
+}
+
+template <class T>
+unsigned int GenericTransactionSignatureChecker<T>::GetTxVersion() const
+{
+    return txTo->nVersion;
+}
+
+template <class T>
+const std::vector<CTxIn>* GenericTransactionSignatureChecker<T>::GetTxvIn() const
+{
+    return &(txTo->vin);
+}
+
+template <class T>
+const std::vector<CTxOut>* GenericTransactionSignatureChecker<T>::GetTxvOut() const
+{
+    return &(txTo->vout);
+}
+
+template <class T>
+unsigned int GenericTransactionSignatureChecker<T>::GetTxWeight() const
+{
+    // line copied from GetTrasactionWeight() in src/consensus/validation.h
+    return ::GetSerializeSize(*txTo, PROTOCOL_VERSION | SERIALIZE_TRANSACTION_NO_WITNESS) * (WITNESS_SCALE_FACTOR - 1) + ::GetSerializeSize(*txTo, PROTOCOL_VERSION);
+}
+
+template <class T>
+const PrecomputedTransactionData* GenericTransactionSignatureChecker<T>::GetPrecomputedTransactionData() const
+{
+    return txdata;
+}
+
+template <class T>
+unsigned int GenericTransactionSignatureChecker<T>::GetnIn() const
+{
+    return nIn;
 }
 
 // explicit instantiation
