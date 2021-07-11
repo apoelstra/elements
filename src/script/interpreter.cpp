@@ -5,13 +5,13 @@
 
 #include <script/interpreter.h>
 
+#include <consensus/consensus.h>
 #include <crypto/ripemd160.h>
 #include <crypto/sha1.h>
 #include <crypto/sha256.h>
 #include <pubkey.h>
 #include <script/script.h>
 #include <uint256.h>
-#include <consensus/consensus.h>
 
 typedef std::vector<unsigned char> valtype;
 
@@ -59,6 +59,22 @@ static inline void popstack(std::vector<valtype>& stack)
     if (stack.empty())
         throw std::runtime_error("popstack(): stack empty");
     stack.pop_back();
+}
+
+static inline void push4_le(std::vector<valtype>& stack, uint32_t v)
+{
+    valtype vch;
+    auto v_le = htole32(v);
+    vch.insert(vch.begin(), (unsigned char*)&v_le, (unsigned char*)&v_le + 4);
+    stack.push_back(vch);
+}
+
+static inline void push8_le(std::vector<valtype>& stack, uint64_t v)
+{
+    valtype vch;
+    auto v_le = htole64(v);
+    vch.insert(vch.begin(), (unsigned char*)&v_le, (unsigned char*)&v_le + 8);
+    stack.push_back(vch);
 }
 
 static inline void pushasset(std::vector<valtype>& stack, const CConfidentialAsset& asset)
@@ -1743,7 +1759,7 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                 case OP_INSPECTINPUTSEQUENCE:
                 case OP_INSPECTINPUTISSUANCE:
                 {
-                    // OP_INSPECTINPUT is available post tapscript
+                    // Input inspection opcodes only available post tapscript
                     if (sigversion == SigVersion::BASE || sigversion == SigVersion::WITNESS_V0) return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
 
                     if (stack.size() < 1)
@@ -1766,11 +1782,8 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                         {
                             valtype vchPrevTxid;
                             vchPrevTxid.insert(vchPrevTxid.begin(), inp.prevout.hash.begin(), inp.prevout.hash.begin() + 32);
-                            valtype vchPrevVout;
-                            auto vout_le = htole32(inp.prevout.n);
-                            vchPrevVout.insert(vchPrevVout.begin(), (unsigned char*)&vout_le, (unsigned char*)&vout_le + 4);
                             stack.push_back(vchPrevTxid);
-                            stack.push_back(vchPrevVout);
+                            push4_le(stack, inp.prevout.n);
 
                             // Push the outpoint flag
                             valtype vchOutpointFlag(1);
@@ -1797,10 +1810,7 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                         }
                         case OP_INSPECTINPUTSEQUENCE:
                         {
-                            valtype vchnSequence;
-                            auto nsequence_le = htole32(inp.nSequence);
-                            vchnSequence.insert(vchnSequence.begin(), (unsigned char*)&nsequence_le, (unsigned char*)&nsequence_le + 4);
-                            stack.push_back(vchnSequence);
+                            push4_le(stack, inp.nSequence);
                             break;
                         }
                         case OP_INSPECTINPUTISSUANCE:
@@ -1820,6 +1830,118 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                             } else { // No issuance
                                 stack.push_back(vchFalse);
                             }
+                            break;
+                        }
+                        default: assert(!"invalid opcode"); break;
+                    }
+                }
+                break;
+
+                case OP_PUSHCURRENTINPUTINDEX:
+                {
+                    // OP_PUSHCURRENTINPUTINDEX is available post tapscript
+                    if (sigversion == SigVersion::BASE || sigversion == SigVersion::WITNESS_V0) return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
+
+                    if (checker.GetnIn() > 0x7fffffff)
+                        return set_error(serror, SCRIPT_ERR_UNKNOWN_ERROR);
+                    CScriptNum currIdx = CScriptNum((int64_t) checker.GetnIn());
+                    stack.push_back(currIdx.getvch());
+                }
+                break;
+
+                case OP_INSPECTOUTPUTASSET:
+                case OP_INSPECTOUTPUTVALUE:
+                case OP_INSPECTOUTPUTNONCE:
+                case OP_INSPECTOUTPUTSCRIPTPUBKEY:
+                {
+                    // Output instropsection codes only available post tapscript is available post tapscript
+                    if (sigversion == SigVersion::BASE || sigversion == SigVersion::WITNESS_V0) return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
+
+                    if (stack.size() < 1)
+                        return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+
+                    int idx = CScriptNum(stacktop(-1), fRequireMinimal).getint();
+                    popstack(stack);
+
+                    const PrecomputedTransactionData *cache = checker.GetPrecomputedTransactionData();
+                    auto outs = checker.GetTxvOut();
+                    if (idx < 0 || (unsigned int)idx >= outs->size())
+                        return set_error(serror, SCRIPT_ERR_INTROSPECT_INDEX_OUT_OF_BOUNDS);
+                    const CTxOut out = outs->at(idx);
+
+                    switch (opcode)
+                    {
+                        case OP_INSPECTOUTPUTASSET:
+                        {
+                            pushasset(stack, out.nAsset);
+                            break;
+                        }
+                        case OP_INSPECTOUTPUTVALUE:
+                        {
+                            pushvalue(stack, out.nValue);
+                            break;
+                        }
+                        case OP_INSPECTOUTPUTNONCE:
+                        {
+                            valtype vchOutNonce;
+                            if (out.nNonce.IsNull()) {
+                                stack.push_back(vchFalse);
+                            } else {
+                                vchOutNonce.insert(vchOutNonce.begin(), out.nNonce.vchCommitment.begin(), out.nNonce.vchCommitment.begin() + 33);
+                                stack.push_back(vchOutNonce);
+                            }
+                            break;
+                        }
+                        case OP_INSPECTOUTPUTSCRIPTPUBKEY:
+                        {
+                            valtype vchScriptPubKeySha256;
+                            vchScriptPubKeySha256.insert(vchScriptPubKeySha256.begin(), cache->m_output_spk_single_hashes[idx].begin(), cache->m_output_spk_single_hashes[idx].begin() + 32);
+                            pushspk(stack, out.scriptPubKey, vchScriptPubKeySha256);
+                            break;
+                        }
+                        default: assert(!"invalid opcode"); break;
+                    }
+                }
+                break;
+
+                case OP_INSPECTVERSION:
+                case OP_INSPECTLOCKTIME:
+                case OP_INSPECTNUMINPUTS:
+                case OP_INSPECTNUMOUTPUTS:
+                case OP_TXWEIGHT:
+                {
+                    // OP_INSPECTTX is available post tapscript
+                    if (sigversion == SigVersion::BASE || sigversion == SigVersion::WITNESS_V0) return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
+
+                    switch (opcode)
+                    {
+                        case OP_INSPECTVERSION:
+                        {
+                            push4_le(stack, (uint32_t) checker.GetTxVersion());
+                            break;
+                        }
+                        case OP_INSPECTLOCKTIME:
+                        {
+                            push4_le(stack, checker.GetLockTime());
+                            break;
+                        }
+                        case OP_INSPECTNUMINPUTS:
+                        {
+                            if (checker.GetTxvIn()->size() > 0x7fffffff)
+                                return set_error(serror, SCRIPT_ERR_UNKNOWN_ERROR);
+                            stack.push_back(CScriptNum(checker.GetTxvIn()->size()).getvch());
+                            break;
+                        }
+                        case OP_INSPECTNUMOUTPUTS:
+                        {
+                            // No need to bound checks for num_outputs. Elements consensus rules would break
+                            // if outpoint more 2**30 is allowed.
+                            stack.push_back(CScriptNum(checker.GetTxvOut()->size()).getvch());
+                            break;
+                        }
+                        case OP_TXWEIGHT:
+                        {
+                            push8_le(stack, checker.GetTxWeight());
                             break;
                         }
                         default: assert(!"invalid opcode"); break;
