@@ -90,7 +90,8 @@ typedef enum ScriptError_t
 
 
     /* Elements: New tapscript related errors */
-    SCRIPT_ERR_SHA2_CONTEXT_LOAD
+    SCRIPT_ERR_SHA2_CONTEXT_LOAD,
+    SCRIPT_ERR_INTROSPECT_INDEX_OUT_OF_BOUNDS
 } ScriptError;
 
 #define SCRIPT_ERR_LAST SCRIPT_ERR_ERROR_COUNT

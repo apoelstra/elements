@@ -61,6 +61,61 @@ static inline void popstack(std::vector<valtype>& stack)
     stack.pop_back();
 }
 
+static inline void pushasset(std::vector<valtype>& stack, const CConfidentialAsset& asset)
+{
+    assert(!asset.IsNull());
+    valtype vchinpAsset;
+    vchinpAsset.insert(vchinpAsset.begin(), asset.vchCommitment.begin() + 1, asset.vchCommitment.begin() + 33);
+    valtype vchAssetPref;
+    vchAssetPref.insert(vchAssetPref.begin(), asset.vchCommitment.begin(), asset.vchCommitment.begin() + 1);
+    stack.push_back(vchinpAsset);
+    stack.push_back(vchAssetPref);
+}
+
+static inline void pushvalue(std::vector<valtype>& stack, const CConfidentialValue& value)
+{
+    valtype vchinpValue;
+    if (value.IsNull()) {
+        vchinpValue.insert(vchinpValue.begin(), 8, 0);
+    } else if (value.IsExplicit()) {
+        // int64_t amt = value.GetAmount();
+        // Convert BE to LE by using reverse iterator
+        vchinpValue.insert(vchinpValue.begin(), value.vchCommitment.rbegin(), value.vchCommitment.rbegin() + 8);
+    } else { // (value.IsCommitment())
+        vchinpValue.insert(vchinpValue.begin(), value.vchCommitment.begin() + 1, value.vchCommitment.begin() + 33);
+    }
+    valtype vchValuePref;
+    if (!value.IsNull()) {
+        vchValuePref.insert(vchValuePref.begin(), value.vchCommitment.begin(), value.vchCommitment.begin() + 1);
+    } else {
+        // If value is null, explicitly push the explicit prefix 0x01
+        vchValuePref = valtype(1, 1);
+    }
+    stack.push_back(vchinpValue); // if value is null, 0(LE 8) is pushed
+    stack.push_back(vchValuePref); // always push prefix
+}
+
+static inline void pushspk(std::vector<valtype>& stack, const CScript& scriptPubKey, const valtype& scriptPubKey_sha)
+{
+    int witnessversion;
+    valtype witnessprogram;
+    if (scriptPubKey.IsWitnessProgram(witnessversion, witnessprogram)) {
+        stack.push_back(witnessprogram);
+        stack.push_back(CScriptNum(witnessversion).getvch());
+    } else {
+        stack.push_back(scriptPubKey_sha);
+        stack.push_back(CScriptNum(-1).getvch());
+    }
+}
+
+/** Compute the outpoint flag(u8) for a given txin **/
+template <class T>
+inline unsigned char GetOutpointFlag(const T& txin)
+{
+    return (unsigned char) ((!txin.assetIssuance.IsNull() ? (COutPoint::OUTPOINT_ISSUANCE_FLAG >> 24) : 0) |
+            (txin.m_is_pegin ? (COutPoint::OUTPOINT_PEGIN_FLAG >> 24) : 0));
+}
+
 bool static IsCompressedOrUncompressedPubKey(const valtype &vchPubKey) {
     if (vchPubKey.size() < CPubKey::COMPRESSED_SIZE) {
         //  Non-canonical public key: too short
@@ -1681,6 +1736,97 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                 }
                 break;
 
+                case OP_INSPECTINPUTOUTPOINT:
+                case OP_INSPECTINPUTASSET:
+                case OP_INSPECTINPUTVALUE:
+                case OP_INSPECTINPUTSCRIPTPUBKEY:
+                case OP_INSPECTINPUTSEQUENCE:
+                case OP_INSPECTINPUTISSUANCE:
+                {
+                    // OP_INSPECTINPUT is available post tapscript
+                    if (sigversion == SigVersion::BASE || sigversion == SigVersion::WITNESS_V0) return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
+
+                    if (stack.size() < 1)
+                        return set_error(serror, SCRIPT_ERR_INVALID_STACK_OPERATION);
+
+                    int idx = CScriptNum(stacktop(-1), fRequireMinimal).getint();
+                    popstack(stack);
+
+                    auto inps = checker.GetTxvIn();
+                    const PrecomputedTransactionData *cache = checker.GetPrecomputedTransactionData();
+                    auto spent_outputs = cache->m_spent_outputs;
+                    if (idx < 0 || (unsigned int)idx >= inps->size() || (unsigned int)idx >= spent_outputs.size())
+                        return set_error(serror, SCRIPT_ERR_INTROSPECT_INDEX_OUT_OF_BOUNDS);
+                    const CTxIn inp = inps->at(idx);
+                    const CTxOut spent_utxo = spent_outputs[idx];
+
+                    switch (opcode)
+                    {
+                        case OP_INSPECTINPUTOUTPOINT:
+                        {
+                            valtype vchPrevTxid;
+                            vchPrevTxid.insert(vchPrevTxid.begin(), inp.prevout.hash.begin(), inp.prevout.hash.begin() + 32);
+                            valtype vchPrevVout;
+                            auto vout_le = htole32(inp.prevout.n);
+                            vchPrevVout.insert(vchPrevVout.begin(), (unsigned char*)&vout_le, (unsigned char*)&vout_le + 4);
+                            stack.push_back(vchPrevTxid);
+                            stack.push_back(vchPrevVout);
+
+                            // Push the outpoint flag
+                            valtype vchOutpointFlag(1);
+                            vchOutpointFlag[0] = GetOutpointFlag(inp);
+                            stack.push_back(vchOutpointFlag);
+                            break;
+                        }
+                        case OP_INSPECTINPUTASSET:
+                        {
+                            pushasset(stack, spent_utxo.nAsset);
+                            break;
+                        }
+                        case OP_INSPECTINPUTVALUE:
+                        {
+                            pushvalue(stack, spent_utxo.nValue);
+                            break;
+                        }
+                        case OP_INSPECTINPUTSCRIPTPUBKEY:
+                        {
+                            valtype vchScriptPubKeySha256;
+                            vchScriptPubKeySha256.insert(vchScriptPubKeySha256.begin(), cache->m_spent_output_spk_single_hashes[idx].begin(), cache->m_spent_output_spk_single_hashes[idx].begin() + 32);
+                            pushspk(stack, spent_utxo.scriptPubKey, vchScriptPubKeySha256);
+                            break;
+                        }
+                        case OP_INSPECTINPUTSEQUENCE:
+                        {
+                            valtype vchnSequence;
+                            auto nsequence_le = htole32(inp.nSequence);
+                            vchnSequence.insert(vchnSequence.begin(), (unsigned char*)&nsequence_le, (unsigned char*)&nsequence_le + 4);
+                            stack.push_back(vchnSequence);
+                            break;
+                        }
+                        case OP_INSPECTINPUTISSUANCE:
+                        {
+                            if (!inp.assetIssuance.IsNull()) {
+                                valtype vchAssetBlindingNonce, vchAssetEntropy;
+                                pushvalue(stack, inp.assetIssuance.nInflationKeys);
+                                pushvalue(stack, inp.assetIssuance.nAmount);
+                                // Next push Asset entropy
+                                vchAssetEntropy.insert(vchAssetEntropy.begin(), inp.assetIssuance.assetEntropy.begin(), inp.assetIssuance.assetEntropy.end());
+                                stack.push_back(vchAssetEntropy);
+                                // Finally push blinding nonce
+                                // By pushing the this order, we make sure that the stack top is empty
+                                // iff there is no issuance. Note that nInflationKeys can be null and can push false
+                                vchAssetBlindingNonce.insert(vchAssetBlindingNonce.begin(), inp.assetIssuance.assetBlindingNonce.begin(), inp.assetIssuance.assetBlindingNonce.end());
+                                stack.push_back(vchAssetBlindingNonce);
+                            } else { // No issuance
+                                stack.push_back(vchFalse);
+                            }
+                            break;
+                        }
+                        default: assert(!"invalid opcode"); break;
+                    }
+                }
+                break;
+
                 default:
                     return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
             }
@@ -1825,14 +1971,6 @@ public:
     }
 };
 
-/** Compute the outpoint flag(u8) for a given txin **/
-template <class T>
-inline unsigned char GetOutpointFlag(const T& txin)
-{
-    return (unsigned char) ((!txin.assetIssuance.IsNull() ? (COutPoint::OUTPOINT_ISSUANCE_FLAG >> 24) : 0) |
-            (txin.m_is_pegin ? (COutPoint::OUTPOINT_PEGIN_FLAG >> 24) : 0));
-}
-
 /** Compute the (single) SHA256 of the concatenation of all outpoint flags of a tx. */
 template <class T>
 uint256 GetOutpointFlagsSHA256(const T& txTo)
@@ -1947,9 +2085,10 @@ std::vector<uint256> GetSpentScriptPubKeysSHA256(const std::vector<CTxOut>& outp
     std::vector<uint256> spent_spk_single_hashes;
     spent_spk_single_hashes.reserve(outputs_spent.size());
     for (const auto& txout : outputs_spent) {
-        CHashWriter ss(SER_GETHASH, 0);
-        ss << txout.scriptPubKey;
-        spent_spk_single_hashes.push_back(ss.GetSHA256());
+        // Normal serialization using the << operater would also serialize the length, therefore we directly write using CSHA256
+        uint256 spent_spk_single_hash;
+        CSHA256().Write(txout.scriptPubKey.data(), txout.scriptPubKey.size()).Finalize(spent_spk_single_hash.begin());
+        spent_spk_single_hashes.push_back(spent_spk_single_hash);
     }
     return spent_spk_single_hashes;
 }
@@ -1958,14 +2097,15 @@ std::vector<uint256> GetSpentScriptPubKeysSHA256(const std::vector<CTxOut>& outp
 template <class T>
 std::vector<uint256> GetOutputScriptPubKeysSHA256(const T& txTo)
 {
-    std::vector<uint256> output_spk_single_hashes;
-    output_spk_single_hashes.reserve(txTo.vout.size());
+    std::vector<uint256> out_spk_single_hashes;
+    out_spk_single_hashes.reserve(txTo.vout.size());
     for (const auto& txout : txTo.vout) {
-        CHashWriter ss(SER_GETHASH, 0);
-        ss << txout.scriptPubKey;
-        output_spk_single_hashes.push_back(ss.GetSHA256());
+        // Normal serialization using the << operater would also serialize the length, therefore we directly write using CSHA256
+        uint256 out_spk_single_hash;
+        CSHA256().Write(txout.scriptPubKey.data(), txout.scriptPubKey.size()).Finalize(out_spk_single_hash.begin());
+        out_spk_single_hashes.push_back(out_spk_single_hash);
     }
-    return output_spk_single_hashes;
+    return out_spk_single_hashes;
 }
 
 template <class T>

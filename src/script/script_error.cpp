@@ -117,6 +117,8 @@ std::string ScriptErrorString(const ScriptError serror)
             return "Signature is found in scriptCode";
         case SCRIPT_ERR_SHA2_CONTEXT_LOAD:
             return "Invalid Sha256 context object";
+        case SCRIPT_ERR_INTROSPECT_INDEX_OUT_OF_BOUNDS:
+            return "Introspection index out of bounds";
         case SCRIPT_ERR_UNKNOWN_ERROR:
         case SCRIPT_ERR_ERROR_COUNT:
         default: break;
