@@ -467,6 +467,51 @@ static bool EvalChecksigPreTapscript(const valtype& vchSig, const valtype& vchPu
     return true;
 }
 
+static bool EvalTapScriptCheckSigFromStack(const valtype& sig, const valtype& vchPubKey, ScriptExecutionData& execdata, unsigned int flags, const Span<const unsigned char> msg, SigVersion sigversion, ScriptError* serror, bool& success)
+{
+    // This code follows the behaviour of EvalCheckSigTapscript
+    assert(sigversion == SigVersion::TAPSCRIPT);
+
+    /*
+     *  The following validation sequence is consensus critical. Please note how --
+     *    upgradable public key versions precede other rules;
+     *    the script execution fails when using empty signature with invalid public key;
+     *    the script execution fails when using non-empty invalid signature.
+     */
+    success = !sig.empty();
+    if (success) {
+        // Implement the sigops/witnesssize ratio test.
+        // Passing with an upgradable public key version is also counted.
+        assert(execdata.m_validation_weight_left_init);
+        execdata.m_validation_weight_left -= VALIDATION_WEIGHT_PER_SIGOP_PASSED;
+        if (execdata.m_validation_weight_left < 0) {
+            return set_error(serror, SCRIPT_ERR_TAPSCRIPT_VALIDATION_WEIGHT);
+        }
+    }
+    if (vchPubKey.size() == 0) {
+        return set_error(serror, SCRIPT_ERR_PUBKEYTYPE);
+    } else if (vchPubKey.size() == 32) {
+        if (success) {
+            if (sig.size() != 64)
+                return set_error(serror, SCRIPT_ERR_SCHNORR_SIG_SIZE);
+            const XOnlyPubKey pubkey{uint256(vchPubKey)};
+            if (!pubkey.VerifySchnorr(msg, sig))
+                return set_error(serror, SCRIPT_ERR_SCHNORR_SIG);
+        }
+    } else {
+        /*
+         *  New public key version softforks should be defined before this `else` block.
+         *  Generally, the new code should not do anything but failing the script execution. To avoid
+         *  consensus bugs, it should not modify any existing values (including `success`).
+         */
+        if ((flags & SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_PUBKEYTYPE) != 0) {
+            return set_error(serror, SCRIPT_ERR_DISCOURAGE_UPGRADABLE_PUBKEYTYPE);
+        }
+    }
+
+    return true;
+}
+
 static bool EvalChecksigTapscript(const valtype& sig, const valtype& pubkey, ScriptExecutionData& execdata, unsigned int flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptError* serror, bool& success)
 {
     assert(sigversion == SigVersion::TAPSCRIPT);
@@ -526,6 +571,11 @@ static bool EvalChecksig(const valtype& sig, const valtype& pubkey, CScript::con
     }
     assert(false);
 }
+
+static const CHashWriter HASHER_TAPLEAF_ELEMENTS = TaggedHash("TapLeaf/elements");
+static const CHashWriter HASHER_TAPBRANCH_ELEMENTS = TaggedHash("TapBranch/elements");
+static const CHashWriter HASHER_TAPTWEAK_ELEMENTS = TaggedHash("TapTweak/elements");
+static const CHashWriter HASHER_TAPSIGHASH_ELEMENTS = TaggedHash("TapSighash/elements");
 
 bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& script, unsigned int flags, const BaseSignatureChecker& checker, SigVersion sigversion, ScriptExecutionData& execdata, ScriptError* serror)
 {
@@ -1672,29 +1722,40 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                     valtype& vchSig    = stacktop(-3);
                     valtype& vchData   = stacktop(-2);
                     valtype& vchPubKey = stacktop(-1);
+                    bool fSuccess;
+                    // Different semantics for CHECKSIGFROMSTACK for taproot and pre-taproot
+                    if (sigversion == SigVersion::BASE || sigversion == SigVersion::WITNESS_V0)
+                    {
+                        // Sigs from stack have no hash byte ever
+                        if (!CheckSignatureEncoding(vchSig, (flags | SCRIPT_NO_SIGHASH_BYTE), serror) || !CheckPubKeyEncoding(vchPubKey, flags, sigversion, serror)) {
+                            //serror is set
+                            return false;
+                        }
 
-                    // Sigs from stack have no hash byte ever
-                    if (!CheckSignatureEncoding(vchSig, (flags | SCRIPT_NO_SIGHASH_BYTE), serror) || !CheckPubKeyEncoding(vchPubKey, flags, sigversion, serror)) {
-                        //serror is set
-                        return false;
+                        valtype vchHash(32);
+                        CSHA256().Write(vchData.data(), vchData.size()).Finalize(vchHash.data());
+                        uint256 hash(vchHash);
+
+                        CPubKey pubkey(vchPubKey);
+                        fSuccess = pubkey.Verify(hash, vchSig);
+                        // CHECKSIGFROMSTACK in pre-tapscript cannot be failed.
+                        if (!fSuccess)
+                            return set_error(serror, SCRIPT_ERR_CHECKSIGVERIFY);
+                    } else {
+                        // New BIP 340 semantics for CHECKSIGFROMSTACK
+                        if (!EvalTapScriptCheckSigFromStack(vchSig, vchPubKey, execdata, flags, vchData, sigversion, serror, fSuccess)) return false;
                     }
-
-                    valtype vchHash(32);
-                    CSHA256().Write(vchData.data(), vchData.size()).Finalize(vchHash.data());
-                    uint256 hash(vchHash);
-
-                    CPubKey pubkey(vchPubKey);
-                    bool fSuccess = pubkey.Verify(hash, vchSig);
-
                     popstack(stack);
                     popstack(stack);
                     popstack(stack);
                     stack.push_back(fSuccess ? vchTrue : vchFalse);
                     if (opcode == OP_CHECKSIGFROMSTACKVERIFY)
-                        popstack(stack);
-
-                    if (!fSuccess)
-                        return set_error(serror, SCRIPT_ERR_CHECKSIGVERIFY);
+                    {
+                        if (fSuccess)
+                            popstack(stack);
+                        else
+                            return set_error(serror, SCRIPT_ERR_CHECKSIGVERIFY);
+                    }
                 }
                 break;
 
@@ -1959,6 +2020,60 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                         }
                         default: assert(!"invalid opcode"); break;
                     }
+                }
+                break;
+
+                case OP_ECMULSCALARVERIFY:
+                {
+                    // OP_ECMULSCALARVERIFY is available post tapscript
+                    if (sigversion == SigVersion::BASE || sigversion == SigVersion::WITNESS_V0) return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
+
+                    valtype& vchRes = stacktop(-3);
+                    valtype& vchGenerator = stacktop(-2);
+                    valtype& vchScalar = stacktop(-1);
+
+                    CPubKey pk(vchGenerator);
+                    CPubKey res(vchRes);
+                    if (!pk.IsFullyValid() || !res.IsFullyValid() || !pk.IsCompressed() || !res.IsCompressed())
+                        return set_error(serror, SCRIPT_ERR_PUBKEYTYPE);
+                    execdata.m_validation_weight_left -= VALIDATION_WEIGHT_PER_SIGOP_PASSED;
+                    if (execdata.m_validation_weight_left < 0) {
+                        return set_error(serror, SCRIPT_ERR_TAPSCRIPT_VALIDATION_WEIGHT);
+                    }
+                    if (vchScalar.size() != 32 || !pk.TweakMulVerify(res, uint256(vchScalar)))
+                        return set_error(serror, SCRIPT_ERR_ECMULTVERIFYFAIL);
+
+                    popstack(stack);
+                    popstack(stack);
+                    popstack(stack);
+                }
+                break;
+                case OP_TAPTWEAKVERIFY:
+                {
+                    // OP_TAPTWEAKVERIFY is available post tapscript
+                    if (sigversion == SigVersion::BASE || sigversion == SigVersion::WITNESS_V0) return set_error(serror, SCRIPT_ERR_BAD_OPCODE);
+
+                    valtype& vchTweakedKey = stacktop(-3);
+                    valtype& vchTweak = stacktop(-2);
+                    valtype& vchInternalKey = stacktop(-1);
+
+                    CPubKey tweakedKey(vchTweakedKey);
+                    if (!tweakedKey.IsFullyValid() || !tweakedKey.IsCompressed() || vchInternalKey.size() != 32 || vchTweak.size() != 32)
+                        return set_error(serror, SCRIPT_ERR_PUBKEYTYPE);
+
+                    execdata.m_validation_weight_left -= VALIDATION_WEIGHT_PER_SIGOP_PASSED;
+                    if (execdata.m_validation_weight_left < 0) {
+                        return set_error(serror, SCRIPT_ERR_TAPSCRIPT_VALIDATION_WEIGHT);
+                    }
+                    const XOnlyPubKey tweakedXOnlyKey{uint256(std::vector<unsigned char>(vchTweakedKey.begin() + 1, vchTweakedKey.begin() + CPubKey::COMPRESSED_SIZE))};
+                    const uint256 tweak(vchTweak);
+                    const XOnlyPubKey internalKey{uint256(vchInternalKey)};
+                    if (!tweakedXOnlyKey.CheckPayToContract(internalKey, tweak, vchTweakedKey[0] & 1))
+                        return set_error(serror, SCRIPT_ERR_ECMULTVERIFYFAIL);
+
+                    popstack(stack);
+                    popstack(stack);
+                    popstack(stack);
                 }
                 break;
 
@@ -2486,12 +2601,6 @@ template void PrecomputedTransactionData::Init(const CTransaction& txTo, std::ve
 template void PrecomputedTransactionData::Init(const CMutableTransaction& txTo, std::vector<CTxOut>&& spent_outputs);
 template PrecomputedTransactionData::PrecomputedTransactionData(const CTransaction& txTo);
 template PrecomputedTransactionData::PrecomputedTransactionData(const CMutableTransaction& txTo);
-
-
-static const CHashWriter HASHER_TAPLEAF_ELEMENTS = TaggedHash("TapLeaf/elements");
-static const CHashWriter HASHER_TAPBRANCH_ELEMENTS = TaggedHash("TapBranch/elements");
-static const CHashWriter HASHER_TAPTWEAK_ELEMENTS = TaggedHash("TapTweak/elements");
-static const CHashWriter HASHER_TAPSIGHASH_ELEMENTS = TaggedHash("TapSighash/elements");
 
 PrecomputedTransactionData::PrecomputedTransactionData(const uint256& hash_genesis_block)
         : m_tapsighash_hasher(CHashWriter(HASHER_TAPSIGHASH_ELEMENTS) << hash_genesis_block << hash_genesis_block) {}
