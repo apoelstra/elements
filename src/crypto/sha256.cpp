@@ -720,7 +720,7 @@ std::vector<unsigned char> CSHA256::Save() const {
 
     WriteLE64(&result[32], bytes << 3);
 
-    memcpy(&result[40], buf, buf_size);
+    if (buf_size != 0) memcpy(&result[40], buf, buf_size);
 
     return result;
 }
@@ -746,8 +746,7 @@ bool CSHA256::Load(const std::vector<unsigned char>& vch) {
     s[7] = ReadBE32(&vch[28]);
 
     bytes = bits >> 3;
-
-    memcpy(buf, &vch[40], buf_size);
+    if (buf_size != 0) memcpy(buf, &vch[40], buf_size);
 
     return true;
 }
