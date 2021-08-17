@@ -91,10 +91,12 @@ typedef enum ScriptError_t
 
     /* Elements: New tapscript related errors */
     SCRIPT_ERR_SHA2_CONTEXT_LOAD,
-    SCRIPT_ERR_INTROSPECT_INDEX_OUT_OF_BOUNDS
+    SCRIPT_ERR_INTROSPECT_INDEX_OUT_OF_BOUNDS,
+    SCRIPT_ERR_EXPECTED_8BYTES,
+    SCRIPT_ERR_ARITHMETIC64
 } ScriptError;
 
-#define SCRIPT_ERR_LAST SCRIPT_ERR_ERROR_COUNT
+#define SCRIPT_ERR_LAST SCRIPT_ERR_ARITHMETIC64
 
 std::string ScriptErrorString(const ScriptError error);
 
