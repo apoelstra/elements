@@ -264,7 +264,7 @@ BOOST_AUTO_TEST_CASE(naive_blinding_test)
         BOOST_CHECK(!VerifyAmounts(inputs, CTransaction(tx4), nullptr, false));
 
         // Check wallet borromean-based rangeproof results against expected args
-        size_t proof_size = DEFAULT_RANGEPROOF_SIZE;
+        size_t proof_size = 4174; // size of a 52-bit proof
         BOOST_CHECK_EQUAL(tx4.witness.vtxoutwit[2].vchRangeproof.size(), proof_size);
         secp256k1_context *ctx = secp256k1_context_create(SECP256K1_CONTEXT_VERIFY);
         int exp = 0;
