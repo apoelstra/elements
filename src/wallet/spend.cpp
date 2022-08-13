@@ -1034,7 +1034,7 @@ bool CWallet::CreateTransactionInternal(
             coin_selection_params.tx_noinputs_size += ::GetSerializeSize(txout, PROTOCOL_VERSION);
         }
 
-        if (recipient.asset == policyAsset && IsDust(txout, chain().relayDustFee()))
+        if (IsDust(txout, chain().relayDustFee()))
         {
             error = _("Transaction amount too small");
             return false;

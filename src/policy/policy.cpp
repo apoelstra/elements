@@ -57,6 +57,8 @@ bool IsDust(const CTxOut& txout, const CFeeRate& dustRelayFeeIn)
         return false; // FIXME
     if (!txout.nAsset.IsExplicit())
         return false;
+    if (txout.nAsset.GetAsset() != policyAsset)
+        return false;
     if (txout.IsFee())
         return false;
     return (txout.nValue.GetAmount() < GetDustThreshold(txout, dustRelayFeeIn));
@@ -141,7 +143,7 @@ bool IsStandardTx(const CTransaction& tx, bool permit_bare_multisig, const CFeeR
         } else if ((whichType == TxoutType::MULTISIG) && (!permit_bare_multisig)) {
             reason = "bare-multisig";
             return false;
-        } else if ((txout.nAsset.IsExplicit() && txout.nAsset.GetAsset() == policyAsset) && IsDust(txout, dust_relay_fee)) {
+        } else if (IsDust(txout, dust_relay_fee)) {
             reason = "dust";
             return false;
         }
