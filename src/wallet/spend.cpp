@@ -854,6 +854,7 @@ bool CWallet::CreateTransactionInternal(
     reservedest.emplace_back(new ReserveDestination(this, change_type)); // policy asset
 
     std::set<CAsset> assets_seen;
+    assets_seen.insert(::policyAsset);
     unsigned int outputs_to_subtract_fee_from = 0; // The number of outputs which we are subtracting the fee from
     for (const auto& recipient : vecSend)
     {
@@ -874,6 +875,26 @@ bool CWallet::CreateTransactionInternal(
         if (recipient.fSubtractFeeFromAmount) {
             outputs_to_subtract_fee_from++;
             coin_selection_params.m_subtract_fee_outputs = true;
+        }
+    }
+    // Also make sure we have change scripts for the pre-selected inputs.
+    std::vector<COutPoint> vPresetInputs;
+    coin_control.ListSelected(vPresetInputs);
+    for (const COutPoint& presetInput : vPresetInputs) {
+        CAsset asset;
+        std::map<uint256, CWalletTx>::const_iterator it = mapWallet.find(presetInput.hash);
+        CTxOut txout;
+        if (it != mapWallet.end()) {
+            asset = it->second.GetOutputAsset(presetInput.n);
+        } else if (coin_control.GetExternalOutput(presetInput, txout)) {
+            asset = txout.nAsset.GetAsset();
+        } else {
+            // Ignore this here, will fail more gracefully later.
+            continue;
+        }
+
+        if (assets_seen.insert(asset).second) {
+            reservedest.emplace_back(new ReserveDestination(this, change_type));
         }
     }
 
@@ -908,12 +929,13 @@ bool CWallet::CreateTransactionInternal(
 
         // One change script per output asset.
         size_t index = 0;
-        for (const auto& value : map_recipients_sum) {
+        for (const auto& asset : assets_seen) {
             // Reserve a new key pair from key pool. If it fails, provide a dummy
             // destination in case we don't need change.
             CTxDestination dest;
             std::string dest_err;
-            if (index >= reservedest.size() || !reservedest[index]->GetReservedDestination(dest, true, dest_err)) {
+            assert(index < reservedest.size());
+            if (!reservedest[index]->GetReservedDestination(dest, true, dest_err)) {
                 if (dest_err.empty()) {
                     dest_err = "Please call keypoolrefill first";
                 }
@@ -923,51 +945,16 @@ bool CWallet::CreateTransactionInternal(
                 //  failures in `BlindTransaction`). We also set the index to -1, indicating
                 //  that this destination is not actually used, and therefore should not be
                 //  returned by the `ReturnDestination` loop below.
-                mapScriptChange[value.first] = std::pair<int, CScript>(-1, dummy_script);
+                mapScriptChange[asset] = std::pair<int, CScript>(-1, dummy_script);
             } else {
-                mapScriptChange[value.first] = std::pair<int, CScript>(index, GetScriptForDestination(dest));
+                mapScriptChange[asset] = std::pair<int, CScript>(index, GetScriptForDestination(dest));
                 ++index;
             }
-        }
 
-        // Also make sure we have change scripts for the pre-selected inputs.
-        std::vector<COutPoint> vPresetInputs;
-        coin_control.ListSelected(vPresetInputs);
-        for (const COutPoint& presetInput : vPresetInputs) {
-            CAsset asset;
-            std::map<uint256, CWalletTx>::const_iterator it = mapWallet.find(presetInput.hash);
-            CTxOut txout;
-            if (it != mapWallet.end()) {
-                 asset = it->second.GetOutputAsset(presetInput.n);
-            } else if (coin_control.GetExternalOutput(presetInput, txout)) {
-                asset = txout.nAsset.GetAsset();
-            } else {
-                // Ignore this here, will fail more gracefully later.
-                continue;
-            }
-
-            if (mapScriptChange.find(asset) != mapScriptChange.end()) {
-                // This asset already has a change script.
-                continue;
-            }
-
-            CTxDestination dest;
-            std::string dest_err;
-            if (index >= reservedest.size() || !reservedest[index]->GetReservedDestination(dest, true, dest_err)) {
-                if (dest_err.empty()) {
-                    dest_err = "Keypool ran out, please call keypoolrefill first";
-                }
-                error = strprintf(_("Transaction needs a change address, but we can't generate it. %s"), dest_err);
-                return false;
-            }
-
-            CScript scriptChange = GetScriptForDestination(dest);
             // A valid destination implies a change script (and
             // vice-versa). An empty change script will abort later, if the
             // change keypool ran out, but change is required.
-            CHECK_NONFATAL(IsValidDestination(dest) != (scriptChange == dummy_script));
-            mapScriptChange[asset] = std::pair<int, CScript>(index, scriptChange);
-            ++index;
+            CHECK_NONFATAL(IsValidDestination(dest) != (mapScriptChange[asset].second == dummy_script));
         }
     }
     assert(mapScriptChange.size() > 0);
