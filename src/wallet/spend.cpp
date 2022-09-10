@@ -844,6 +844,7 @@ bool CWallet::CreateTransactionInternal(
     CoinSelectionParams coin_selection_params; // Parameters for coin selection, init with dummy
     coin_selection_params.m_avoid_partial_spends = coin_control.m_avoid_partial_spends;
 
+    // ELEMENTS: attempt to reserve change destinations for all assets
     CScript dummy_script = CScript() << 0x00;
     CAmountMap map_recipients_sum;
     // Always assume that we are at least sending policyAsset.
@@ -856,15 +857,16 @@ bool CWallet::CreateTransactionInternal(
     unsigned int outputs_to_subtract_fee_from = 0; // The number of outputs which we are subtracting the fee from
     for (const auto& recipient : vecSend)
     {
+        // Skip over issuance outputs, no need to select those coins, or to allocate
+        // change for them, since we will issue exactly as much as the recipient needs
+        if (recipient.asset == CAsset(uint256S("1")) || recipient.asset == CAsset(uint256S("2"))) {
+            continue;
+        }
+
         // Pad change keys to cover total possible number of assets
         // One already exists(for policyAsset), so one for each destination
         if (assets_seen.insert(recipient.asset).second) {
             reservedest.emplace_back(new ReserveDestination(this, change_type));
-        }
-
-        // Skip over issuance outputs, no need to select those coins
-        if (recipient.asset == CAsset(uint256S("1")) || recipient.asset == CAsset(uint256S("2"))) {
-            continue;
         }
 
         map_recipients_sum[recipient.asset] += recipient.nAmount;
