@@ -2,6 +2,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <core_io.h>
+
 #include <blind.h> // ELEMENTS: for MAX_RANGEPROOF_SIZE
 #include <consensus/validation.h>
 #include <interfaces/chain.h>
@@ -13,6 +15,7 @@
 #include <util/moneystr.h>
 #include <util/rbf.h>
 #include <util/translation.h>
+#include <wallet/blind.h>
 #include <wallet/coincontrol.h>
 #include <wallet/fees.h>
 #include <wallet/receive.h>
@@ -758,6 +761,7 @@ bool fillBlindDetails(BlindDetails* det, CWallet* wallet, CMutableTransaction& t
         det->o_amounts.push_back(txNew.vout[nOut].nValue.GetAmount());
     }
 
+std::cout << "In fillBlinds see num_inputs_blinded " << num_inputs_blinded << " and num_to_blind " << det->num_to_blind << std::endl;
     // There are a few edge-cases of blinding we need to take care of
     //
     // First, if there are blinded inputs but not outputs to blind
@@ -838,6 +842,7 @@ bool CWallet::CreateTransactionInternal(
 
     AssertLockHeld(cs_wallet);
 
+    Blinding::TxData blinding_data; // ELEMENTS: blinded version of the resulting transaction
     CMutableTransaction txNew; // The resulting transaction that we make
     txNew.nLockTime = GetLocktimeForNewTransaction(chain(), GetLastBlockHash(), GetLastBlockHeight());
 
@@ -918,6 +923,7 @@ bool CWallet::CreateTransactionInternal(
             } else {
                 mapBlindingKeyChange[dest.first] = std::nullopt;
             }
+            blinding_data.PushChangeOutput(dest.first, 0, GetScriptForDestination(dest.second), mapBlindingKeyChange[dest.first]);
         }
     } else { // no coin control: send change to newly generated address
         // Note: We use a new key here to keep it from being obvious which side is the change.
@@ -950,6 +956,7 @@ bool CWallet::CreateTransactionInternal(
                 mapScriptChange[asset] = std::pair<int, CScript>(index, GetScriptForDestination(dest));
                 ++index;
             }
+            blinding_data.PushChangeOutput(asset, 0, mapScriptChange[asset].second, GetBlindingPubKey(mapScriptChange[asset].second));
 
             // A valid destination implies a change script (and
             // vice-versa). An empty change script will abort later, if the
@@ -959,22 +966,6 @@ bool CWallet::CreateTransactionInternal(
     }
     assert(mapScriptChange.size() > 0);
     CTxOut change_prototype_txout(mapScriptChange.begin()->first, 0, mapScriptChange.begin()->second.second);
-    // TODO CA: Set this for each change output
-    coin_selection_params.change_output_size = GetSerializeSize(change_prototype_txout);
-    if (g_con_elementsmode) {
-        if (blind_details) {
-            change_prototype_txout.nAsset.vchCommitment.resize(33);
-            change_prototype_txout.nValue.vchCommitment.resize(33);
-            change_prototype_txout.nNonce.vchCommitment.resize(33);
-            coin_selection_params.change_output_size = GetSerializeSize(change_prototype_txout);
-            coin_selection_params.change_output_size += (MAX_RANGEPROOF_SIZE + DEFAULT_SURJECTIONPROOF_SIZE + WITNESS_SCALE_FACTOR - 1)/WITNESS_SCALE_FACTOR;
-        } else {
-            change_prototype_txout.nAsset.vchCommitment.resize(33);
-            change_prototype_txout.nValue.vchCommitment.resize(9);
-            change_prototype_txout.nNonce.vchCommitment.resize(1);
-            coin_selection_params.change_output_size = GetSerializeSize(change_prototype_txout);
-        }
-    }
 
     // Get size of spending the change output
     int change_spend_size = CalculateMaximumSignedInputSize(change_prototype_txout, this);
@@ -1009,20 +1000,9 @@ bool CWallet::CreateTransactionInternal(
     cc_temp.m_confirm_target = chain().estimateMaxBlocks();
     coin_selection_params.m_long_term_feerate = GetMinimumFeeRate(*this, cc_temp, nullptr);
 
-    // Calculate the cost of change
-    // Cost of change is the cost of creating the change output + cost of spending the change output in the future.
-    // For creating the change output now, we use the effective feerate.
-    // For spending the change output in the future, we use the discard feerate for now.
-    // So cost of change = (change output size * effective feerate) + (size of spending change output * discard feerate)
-    coin_selection_params.m_change_fee = coin_selection_params.m_effective_feerate.GetFee(coin_selection_params.change_output_size);
-    coin_selection_params.m_cost_of_change = coin_selection_params.m_discard_feerate.GetFee(coin_selection_params.change_spend_size) + coin_selection_params.m_change_fee;
-
     // vouts to the payees
     if (!coin_selection_params.m_subtract_fee_outputs) {
         coin_selection_params.tx_noinputs_size = 11; // Static vsize overhead + outputs vsize. 4 nVersion, 4 nLocktime, 1 input count, 1 output count, 1 witness overhead (dummy, flag, stack size)
-        if (g_con_elementsmode) {
-            coin_selection_params.tx_noinputs_size += 44; // change output: 9 bytes value, 1 byte scriptPubKey, 33 bytes asset, 1 byte nonce
-        }
     }
     for (const auto& recipient : vecSend)
     {
@@ -1041,18 +1021,28 @@ bool CWallet::CreateTransactionInternal(
         }
         txNew.vout.push_back(txout);
 
-        // ELEMENTS
+        // ELEMENTS: fee cost for outputs is covered by AdjustCoinSelectionParameters below,
+        //  which also understands how policy asset change vs non-policy asset change is
+        //  treated by coin selection
+        blinding_data.PushRecipientOutput(recipient);
         if (blind_details) {
             blind_details->o_pubkeys.push_back(recipient.confidentiality_key);
             if (blind_details->o_pubkeys.back().IsFullyValid()) {
                 blind_details->num_to_blind++;
                 blind_details->only_recipient_blind_index = txNew.vout.size()-1;
-                if (!coin_selection_params.m_subtract_fee_outputs) {
-                    coin_selection_params.tx_noinputs_size += (MAX_RANGEPROOF_SIZE + DEFAULT_SURJECTIONPROOF_SIZE + WITNESS_SCALE_FACTOR - 1)/WITNESS_SCALE_FACTOR;
-                }
             }
         }
     }
+    blinding_data.AdjustCoinSelectionParameters(coin_selection_params); // ELEMENTS
+
+    // ELEMENTS: this block has been moved down below AdjustCoinSelectionParameters
+    // Calculate the cost of change
+    // Cost of change is the cost of creating the change output + cost of spending the change output in the future.
+    // For creating the change output now, we use the effective feerate.
+    // For spending the change output in the future, we use the discard feerate for now.
+    // So cost of change = (change output size * effective feerate) + (size of spending change output * discard feerate)
+    coin_selection_params.m_change_fee = coin_selection_params.m_effective_feerate.GetFee(coin_selection_params.change_output_size);
+    coin_selection_params.m_cost_of_change = coin_selection_params.m_discard_feerate.GetFee(coin_selection_params.change_spend_size) + coin_selection_params.m_change_fee;
 
     // Include the fees for things that aren't inputs, excluding the change output
     const CAmount not_input_fees = coin_selection_params.m_effective_feerate.GetFee(coin_selection_params.tx_noinputs_size);
@@ -1078,9 +1068,12 @@ bool CWallet::CreateTransactionInternal(
 
     // Always make a change output
     // We will reduce the fee from this change output later, and remove the output if it is too small.
-    // ELEMENTS: wrap this all in a loop, set nChangePosInOut specifically for policy asset
-    CAmountMap map_change_and_fee = map_inputs_sum - map_recipients_sum;
-    // Zero out any non-policy assets which have zero change value
+    CAmountMap map_change_and_fee = map_inputs_sum - map_recipients_sum; // ELEMENTS: map rather than value
+    std::optional<size_t> policy_change_pos = nChangePosInOut >= 0 ? std::make_optional(nChangePosInOut) : std::nullopt;
+    if (!blinding_data.RandomizeAndSetChange(map_change_and_fee, policy_change_pos, error)) {
+        return false;
+    }
+    // ELEMENTS: Zero out any non-policy assets which have zero change value
     for (auto it = map_change_and_fee.begin(); it != map_change_and_fee.end(); ) {
         if (it->first != policyAsset && it->second == 0) {
             it = map_change_and_fee.erase(it);
@@ -1089,6 +1082,7 @@ bool CWallet::CreateTransactionInternal(
         }
     }
 
+    nChangePosInOut = policy_change_pos ? (int) *policy_change_pos : -1;
     // Uniformly randomly place change outputs for all assets, except that the policy-asset
     // change may have a fixed position.
     std::vector<std::optional<CAsset>> change_pos{txNew.vout.size() + map_change_and_fee.size()};
@@ -1210,9 +1204,11 @@ bool CWallet::CreateTransactionInternal(
             reissuance_index = txNew.vin.size() - 1;
             token_blinding = coin.bf_asset;
         }
+        blinding_data.PushInput(coin, nSequence);
     }
 
     // ELEMENTS add issuance details and blinding details
+    blinding_data.AddIssuanceDetails(issuance_details);
     std::vector<CKey> issuance_asset_keys;
     std::vector<CKey> issuance_token_keys;
     if (issuance_details) {
@@ -1305,7 +1301,23 @@ bool CWallet::CreateTransactionInternal(
             return false;
         }
 
+blinding_data.DummyBlindTx();
+    UniValue entry(UniValue::VOBJ);
+    TxToUniv(CTransaction(blinding_data.GetTx()), uint256(), /* include_addresses */ false, entry);
+    std::string jsonOutput = entry.write(4);
+    tfm::format(std::cout, "%s\n", jsonOutput);
+
+    TxToUniv(CTransaction(tx_blinded), uint256(), /* include_addresses */ false, entry);
+    jsonOutput = entry.write(4);
+    tfm::format(std::cout, "%s\n", jsonOutput);
+std::cout << CalculateMaximumSignedTxSize(CTransaction(blinding_data.GetTx()), this, &coin_control).vsize << std::endl;
+std::cout << CalculateMaximumSignedTxSize(CTransaction(tx_blinded), this, &coin_control).vsize << std::endl;
+assert(
+    CalculateMaximumSignedTxSize(CTransaction(blinding_data.GetTx()), this, &coin_control).vsize
+    == CalculateMaximumSignedTxSize(CTransaction(tx_blinded), this, &coin_control).vsize
+);
         tx_sizes = CalculateMaximumSignedTxSize(CTransaction(tx_blinded), this, &coin_control);
+        tx_sizes = CalculateMaximumSignedTxSize(CTransaction(blinding_data.GetTx()), this, &coin_control);
     } else {
         tx_sizes = CalculateMaximumSignedTxSize(CTransaction(txNew), this, &coin_control);
     }
