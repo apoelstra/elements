@@ -10,12 +10,12 @@
 #include <string.h>
 #include <stdio.h>
 
-#include "group.h"
-#include "scalar.h"
-#include "testrand.h"
-#include "util.h"
+#include "../../group.h"
+#include "../../scalar.h"
+#include "../../testrand.h"
+#include "../../util.h"
 
-#include "include/secp256k1_generator.h"
+#include "../../../include/secp256k1_generator.h"
 
 void test_generator_api(void) {
     unsigned char key[32];
@@ -134,7 +134,7 @@ void test_shallue_van_de_woestijne(void) {
             shallue_van_de_woestijne(&ge, &fe);
             secp256k1_ge_to_storage(&ges, &ge);
 
-            CHECK(memcmp(&ges, &results[i * 2 + s - 2], sizeof(secp256k1_ge_storage)) == 0);
+            CHECK(secp256k1_memcmp_var(&ges, &results[i * 2 + s - 2], sizeof(secp256k1_ge_storage)) == 0);
         }
     }
 }
@@ -188,11 +188,11 @@ void test_generator_generate(void) {
         CHECK(secp256k1_generator_generate_blinded(ctx, &gen, v, s));
         secp256k1_generator_load(&ge, &gen);
         secp256k1_ge_to_storage(&ges, &ge);
-        CHECK(memcmp(&ges, &results[i - 1], sizeof(secp256k1_ge_storage)) == 0);
+        CHECK(secp256k1_memcmp_var(&ges, &results[i - 1], sizeof(secp256k1_ge_storage)) == 0);
         CHECK(secp256k1_generator_generate(ctx, &gen, v));
         secp256k1_generator_load(&ge, &gen);
         secp256k1_ge_to_storage(&ges, &ge);
-        CHECK(memcmp(&ges, &results[i - 1], sizeof(secp256k1_ge_storage)) == 0);
+        CHECK(secp256k1_memcmp_var(&ges, &results[i - 1], sizeof(secp256k1_ge_storage)) == 0);
     }
 
     /* There is no range restriction on the value, but the blinder must be a
@@ -215,7 +215,7 @@ void test_generator_fixed_vector(void) {
 
     CHECK(secp256k1_generator_parse(ctx, &parse, two_g));
     CHECK(secp256k1_generator_serialize(ctx, result, &parse));
-    CHECK(memcmp(two_g, result, 33) == 0);
+    CHECK(secp256k1_memcmp_var(two_g, result, 33) == 0);
 
     result[0] = 0x0a;
     CHECK(secp256k1_generator_parse(ctx, &parse, result));
