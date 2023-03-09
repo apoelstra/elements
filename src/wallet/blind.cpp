@@ -13,6 +13,14 @@
 
 namespace Blinding {
 
+/** Helper to get a generator from as asset ID */
+static secp256k1_generator unblinded_generator(const CAsset& asset) {
+    secp256k1_generator gen;
+    int res = secp256k1_generator_generate(secp256k1_blind_context, &gen, asset.begin());
+    assert(res); // cannot fail except with negligible probability
+    return gen;
+}
+
 /** Helper for computing a rangeproof size from an output type */
 static size_t rangeproof_size(RangeproofType ty) {
     switch (ty) {
@@ -69,17 +77,19 @@ void TxData::MaybePushDummyOutput() {
         }
     }
     // If we think we'll have no blinding factors on the output side, push a
-    // dummy in case we have blinded inputs and need to balance them.
+    // dummy in case we have blinded inputs and need to balance them. If the
+    // dummy winds up being the only blinded output (with no blinded inputs)
+    // we'll drop it later in DummyBlindTx.
     // If we think we'll have just *one* blinding factor on the output side,
     // also push a dummy, in case we have no blinded inputs but need to balance
-    // the sole other output bf.
+    // the sole other output bf. If it turns out there are blinded inputs,
+    // we'll drop this in DummyBlindTx.
     if (blind_count < 2) {
         PushDummyOutput();
     }
 }
 
 void TxData::PushFeeOutput() {
-std::cout << "PUshing a fee output" << std::endl;
     CTxOut txout(policyAsset, 0, CScript());
     OutputData output_data = {
         .blinding_key = CPubKey(),
@@ -169,7 +179,7 @@ void TxData::AdjustCoinSelectionParameters(CoinSelectionParams& coin_selection_p
 
     // Weight for each output
     assert(m_output_data.size() == m_tx.vout.size());
-    for (unsigned int i = 0; i < m_output_data.size(); i++) {
+    for (size_t i = 0; i < m_output_data.size(); i++) {
         size_t weight = output_weight(m_tx.vout[i], m_output_data[i]);
         coin_selection_params.tx_noinputs_size += (weight + WITNESS_SCALE_FACTOR - 1) / WITNESS_SCALE_FACTOR;
     }
@@ -242,7 +252,7 @@ bool TxData::RandomizeAndSetChange(const CAmountMap& change_map, std::optional<s
 
     // Create all the change outputs in their respective places, inserting them
     // in increasing order so that none of them affect each others' indices
-    for (unsigned int i = 0; i < change_pos.size(); i++) {
+    for (size_t i = 0; i < change_pos.size(); i++) {
         if (!change_pos[i]) {
             continue;
         }
@@ -265,11 +275,21 @@ void TxData::PushInput(const CInputCoin& coin, uint32_t sequence) {
     InputData input_data = {
         .value = coin.value,
         .asset = coin.asset,
+        .blinded_asset = std::nullopt,
         .is_blinded = coin.txout.nValue.IsCommitment() || coin.txout.nAsset.IsCommitment(),
         .bf_asset = coin.bf_asset,
         .bf_net = uint256{},
+        .issuance_asset_data = std::nullopt,
+        .issuance_token_data = std::nullopt,
     };
-    int res = secp256k1_netbf_compute(secp256k1_blind_context, input_data.bf_net.data(), coin.value, coin.bf_value.data(), coin.bf_asset.data());
+    int res;
+    if (coin.txout.nAsset.IsCommitment()) {
+        secp256k1_generator gen;
+        res = secp256k1_generator_parse(secp256k1_blind_context, &gen, coin.txout.nAsset.vchCommitment.data());
+        assert(res); /* generator had a valid surjection proof at some point, so it must be valid */
+        input_data.blinded_asset = gen;
+    }
+    res = secp256k1_netbf_compute(secp256k1_blind_context, input_data.bf_net.data(), coin.value, coin.bf_value.data(), coin.bf_asset.data());
     assert(res); /* blinding factors should not overflow */
 
     m_tx.vin.emplace_back(CTxIn(coin.outpoint, CScript(), sequence));
@@ -277,17 +297,19 @@ void TxData::PushInput(const CInputCoin& coin, uint32_t sequence) {
 }
 
 void TxData::AddIssuanceDetails(const IssuanceDetails* issuance_details) {
-std::cout << "ADDING ISSUANCE DATA1" << std::endl;
     assert(m_tx.vin.size() > 0);
     if (!issuance_details) {
         return;
     }
-std::cout << "ADDING ISSUANCE DATA2" << std::endl;
+
+    // Index of the input we are attaching the issuance to. For new issuances
+    // this is always input 0. For reissuances we may reassign this.
+    size_t issuance_idx = 0;
 
     // Locate issuance/token outputs
     std::optional<size_t> asset_index = std::nullopt;
     std::optional<size_t> token_index = std::nullopt;
-    for (unsigned int i = 0; i < m_tx.vout.size(); i++) {
+    for (size_t i = 0; i < m_tx.vout.size(); i++) {
         if (m_tx.vout[i].nAsset.IsExplicit() && m_tx.vout[i].nAsset.GetAsset() == CAsset(uint256S("1"))) {
             asset_index = i;
         } else if (m_tx.vout[i].nAsset.IsExplicit() && m_tx.vout[i].nAsset.GetAsset() == CAsset(uint256S("2"))) {
@@ -298,7 +320,6 @@ std::cout << "ADDING ISSUANCE DATA2" << std::endl;
     if (!asset_index && !token_index) {
         return;
     }
-std::cout << "ADDING ISSUANCE DATA3" << std::endl;
 
     std::optional<IssuanceData> asset_data = std::nullopt;
     std::optional<IssuanceData> token_data = std::nullopt;
@@ -317,8 +338,6 @@ std::cout << "ADDING ISSUANCE DATA3" << std::endl;
         // We're making asset outputs, fill out asset type and issuance input
         if (asset_index) {
             asset_data = IssuanceData {
-                .input_idx = 0,
-                .is_token = false,
                 .value = m_tx.vout[*asset_index].nValue.GetAmount(),
                 .asset = asset,
                 .blind_amount = issuance_details->blind_issuance ? RangeproofType::RANGEPROOF_FULL : RangeproofType::NO_RANGEPROOF,
@@ -327,8 +346,6 @@ std::cout << "ADDING ISSUANCE DATA3" << std::endl;
         // We're making reissuance token outputs
         if (token_index) {
             token_data = IssuanceData {
-                .input_idx = 0,
-                .is_token = true,
                 .value = m_tx.vout[*token_index].nValue.GetAmount(),
                 .asset = token,
                 .blind_amount = issuance_details->blind_issuance ? RangeproofType::RANGEPROOF_FULL : RangeproofType::NO_RANGEPROOF,
@@ -339,8 +356,6 @@ std::cout << "ADDING ISSUANCE DATA3" << std::endl;
             // rangeproof on it to save transaction space.
             if (issuance_details->blind_issuance && !asset_index) {
                 asset_data = IssuanceData {
-                    .input_idx = 0,
-                    .is_token = false,
                     .value = 0,
                     .asset = asset,
                     .blind_amount = RangeproofType::RANGEPROOF_SINGLE,
@@ -349,30 +364,27 @@ std::cout << "ADDING ISSUANCE DATA3" << std::endl;
         }
     // Asset being reissued with explicitly named asset/token
     } else if (asset_index) {
-        std::optional<size_t> reissuance_index = std::nullopt;
-        for (unsigned int i = 0; i< m_input_data.size(); i++) {
+        for (size_t i = 0; i< m_input_data.size(); i++) {
             if (m_input_data[i].asset == issuance_details->reissuance_asset) {
-                reissuance_index = i;
+                issuance_idx = i;
                 break;
             }
         }
-        assert(reissuance_index);
 
         // Fill in output with issuance
         m_tx.vout[*asset_index].nAsset = issuance_details->reissuance_asset;
         // Fill in issuance
         // Blinding revealing underlying asset
-        m_tx.vin[*reissuance_index].assetIssuance.assetBlindingNonce = m_input_data[*reissuance_index].bf_asset;
-        m_tx.vin[*reissuance_index].assetIssuance.assetEntropy = issuance_details->entropy;
-        m_tx.vin[*reissuance_index].assetIssuance.nAmount = m_tx.vout[*asset_index].nValue;
+        m_tx.vin[issuance_idx].assetIssuance.assetBlindingNonce = m_input_data[issuance_idx].bf_asset;
+        m_tx.vin[issuance_idx].assetIssuance.assetEntropy = issuance_details->entropy;
+        m_tx.vin[issuance_idx].assetIssuance.nAmount = m_tx.vout[*asset_index].nValue;
 
         // If blinded token derivation, blind the issuance regardless of what the user requested
+        // (Leaving it unblinded is forbidden by consensus.)
         // FIXME shouldn't we return an error here?
         CAsset temp_token;
         CalculateReissuanceToken(temp_token, issuance_details->entropy, true);
         token_data = IssuanceData {
-            .input_idx = *reissuance_index,
-            .is_token = true,
             .value = m_tx.vout[*asset_index].nValue.GetAmount(),
             .asset = issuance_details->reissuance_token,
             .blind_amount = temp_token == issuance_details->reissuance_token ? RangeproofType::RANGEPROOF_FULL : RangeproofType::NO_RANGEPROOF,
@@ -380,15 +392,15 @@ std::cout << "ADDING ISSUANCE DATA3" << std::endl;
     }
 
     if (asset_data) {
-        m_tx.vin[asset_data->input_idx].assetIssuance.nAmount = asset_data->value;
+        m_tx.vin[issuance_idx].assetIssuance.nAmount = asset_data->value;
         m_tx.vout[*asset_index].nAsset = asset_data->asset;
-        m_issuance_data.emplace_back(*asset_data);
     }
     if (token_data) {
-        m_tx.vin[token_data->input_idx].assetIssuance.nInflationKeys = token_data->value;
+        m_tx.vin[issuance_idx].assetIssuance.nInflationKeys = token_data->value;
         m_tx.vout[*token_index].nAsset = token_data->asset;
-        m_issuance_data.emplace_back(*token_data);
     }
+    m_input_data[issuance_idx].issuance_asset_data = asset_data;
+    m_input_data[issuance_idx].issuance_token_data = token_data;
 }
 
 // Note for reviewers of this function: I (Andrew) ran the functional tests with
@@ -398,16 +410,25 @@ std::cout << "ADDING ISSUANCE DATA3" << std::endl;
 // in a smaller transaction.
 void TxData::DummyBlindTx(void) {
     // Analyze transaction to decide what to do with e.g. dummy outputs
+    size_t n_surjection_inputs = 0;
     size_t n_blinded_inputs = 0;
     size_t n_blinded_outputs = 0;
     for (const auto& inp : m_input_data) {
+        n_surjection_inputs++;
         if (inp.is_blinded) {
             n_blinded_inputs++;
         }
-    }
-    for (const auto& iss : m_issuance_data) {
-        if (iss.IsBlinded()) {
-            n_blinded_inputs++;
+        if (inp.issuance_asset_data) {
+            n_surjection_inputs++;
+            if (inp.issuance_asset_data->IsBlinded()) {
+                n_blinded_inputs++;
+            }
+        }
+        if (inp.issuance_token_data) {
+            n_surjection_inputs++;
+            if (inp.issuance_token_data->IsBlinded()) {
+                n_blinded_inputs++;
+            }
         }
     }
     // Count blinded outputs. Note that we are counting something different
@@ -418,11 +439,9 @@ void TxData::DummyBlindTx(void) {
     std::optional<size_t> dummy_idx = std::nullopt;
     for (size_t i = 0; i < m_output_data.size(); i++) {
         if (m_output_data[i].blind_amount != RangeproofType::NO_RANGEPROOF) {
-std::cout << "Dummy Blinding counting value for " << OutputTypeToString(m_output_data[i].ty) << std::endl;
             n_blinded_outputs++;
         }
         if (m_output_data[i].blind_asset) {
-std::cout << "Dummy Blinding counting asset for " << OutputTypeToString(m_output_data[i].ty) << std::endl;
             n_blinded_outputs++; 
         }
         if (m_output_data[i].ty == OutputType::OUTPUT_DUMMY) {
@@ -430,8 +449,6 @@ std::cout << "Dummy Blinding counting asset for " << OutputTypeToString(m_output
             dummy_idx = i;
         }
     }
-std::cout << "Dummy Blinding dummy " << !!dummy_idx << std::endl;
-std::cout << "Dummy Blinding see " << n_blinded_outputs << " blinded outputs, and " << n_blinded_inputs << " blinded inputs" << std::endl;
     // First: if there is more than one fully-blinded output, including our dummy, drop the dummy
     if (n_blinded_outputs > 2 && dummy_idx) {
         m_tx.vout.erase(m_tx.vout.begin() + *dummy_idx);
@@ -439,8 +456,13 @@ std::cout << "Dummy Blinding see " << n_blinded_outputs << " blinded outputs, an
         dummy_idx = std::nullopt;
         n_blinded_outputs -= 1;
     }
-std::cout << "Dummy Blinding dummy " << !!dummy_idx << std::endl;
-std::cout << "Dummy Blind222 see " << n_blinded_outputs << " blinded outputs, and " << n_blinded_inputs << " blinded inputs" << std::endl;
+    // Next; if there are blinded inputs, some blinded output, and also a dummy, drop it
+    if (n_blinded_inputs > 0 && n_blinded_outputs > 1 && dummy_idx) {
+        m_tx.vout.erase(m_tx.vout.begin() + *dummy_idx);
+        m_output_data.erase(m_output_data.begin() + *dummy_idx);
+        dummy_idx = std::nullopt;
+        n_blinded_outputs -= 1;
+    }
     // Next: if there are no blinded inputs but a dummy output, drop it
     if (n_blinded_inputs == 0 && n_blinded_outputs == 1) {
         assert(dummy_idx); // impossible due to logic in AdjustCoinSelectionParameters
@@ -494,11 +516,9 @@ std::cout << "Dummy Blind222 see " << n_blinded_outputs << " blinded outputs, an
             }
         }
     }
-std::cout << "Dummy Blinding dummy " << !!dummy_idx << std::endl;
-std::cout << "Dummy Bl333322 see " << n_blinded_outputs << " blinded outputs, and " << n_blinded_inputs << " blinded inputs" << std::endl;
 
     // Okay, done. Fill in blinding data with dummies
-    m_tx.witness.vtxinwit.resize(m_tx.vin.size());
+    // Output blinding data
     m_tx.witness.vtxoutwit.resize(m_tx.vout.size());
     for (size_t i = 0; i < m_tx.vout.size(); i++) {
         if (m_output_data[i].blind_amount == RangeproofType::NO_RANGEPROOF) {
@@ -510,42 +530,159 @@ std::cout << "Dummy Bl333322 see " << n_blinded_outputs << " blinded outputs, an
         }
         m_tx.witness.vtxoutwit[i].vchRangeproof.resize(rangeproof_size(m_output_data[i].blind_amount));
         if (m_output_data[i].blind_asset) {
-            m_tx.witness.vtxoutwit[i].vchSurjectionproof.resize(surjectionproof_size(m_tx.vin.size() + m_issuance_data.size()));
+            m_tx.witness.vtxoutwit[i].vchSurjectionproof.resize(surjectionproof_size(n_surjection_inputs));
         } else {
             assert(m_tx.witness.vtxoutwit[i].vchSurjectionproof.empty());
         }
     }
-    for (const auto& data : m_issuance_data) {
-std::cout << "ISSUANCE DATA" << std::endl;
-        auto& rangeproof = data.is_token
-            ? m_tx.witness.vtxinwit[data.input_idx].vchIssuanceAmountRangeproof
-            : m_tx.witness.vtxinwit[data.input_idx].vchInflationKeysRangeproof;
-        auto& commit = data.is_token
-            ? m_tx.vin[data.input_idx].assetIssuance.nAmount
-            : m_tx.vin[data.input_idx].assetIssuance.nInflationKeys;
-        if (data.blind_amount == RangeproofType::NO_RANGEPROOF) {
-            if (data.value == 0) {
-                commit.vchCommitment.clear();
+    // Input (issuance) blinding data
+    m_tx.witness.vtxinwit.resize(m_tx.vin.size());
+    for (size_t i = 0; i < m_tx.vin.size(); i++) {
+        const auto& inp = m_input_data[i];
+        auto& vin = m_tx.vin[i];
+        auto& wit = m_tx.witness.vtxinwit[i];
+
+        if (inp.issuance_asset_data) {
+            if (inp.issuance_asset_data->blind_amount == RangeproofType::NO_RANGEPROOF) {
+                if (inp.issuance_asset_data->value == 0) {
+                    vin.assetIssuance.nAmount.vchCommitment.clear();
+                } else {
+                    vin.assetIssuance.nAmount.vchCommitment.resize(9);
+                }
             } else {
-                commit.vchCommitment.resize(9);
-assert(!m_tx.vin[data.input_idx].assetIssuance.IsNull());
+                vin.assetIssuance.nAmount.vchCommitment.resize(33);
             }
-        } else {
-            commit.vchCommitment.resize(33);
-assert(!m_tx.vin[data.input_idx].assetIssuance.IsNull());
+            wit.vchIssuanceAmountRangeproof.resize(rangeproof_size(inp.issuance_asset_data->blind_amount));
         }
-        rangeproof.resize(rangeproof_size(data.blind_amount));
+
+        if (inp.issuance_token_data) {
+            if (inp.issuance_token_data->blind_amount == RangeproofType::NO_RANGEPROOF) {
+                if (inp.issuance_token_data->value == 0) {
+                    vin.assetIssuance.nInflationKeys.vchCommitment.clear();
+                } else {
+                    vin.assetIssuance.nInflationKeys.vchCommitment.resize(9);
+                }
+            } else {
+                vin.assetIssuance.nInflationKeys.vchCommitment.resize(33);
+            }
+            wit.vchInflationKeysRangeproof.resize(rangeproof_size(inp.issance_token_data->blind_amount));
+        }
     }
 }
 
 void TxData::DropChangeOutput(void) {
-    for (unsigned int i = 0; i < m_output_data.size(); i++) {
+    for (size_t i = 0; i < m_output_data.size(); i++) {
         if (m_output_data[i].ty == OutputType::OUTPUT_CHANGE_POLICY) {
             m_output_data.erase(m_output_data.begin() + i);
             m_tx.vout.erase(m_tx.vout.begin() + i);
         }
     }
     MaybePushDummyOutput();
+}
+
+void TxData::SetFee(CAmount fee) {
+    if (g_con_elementsmode) {
+        return;
+    }
+    for (size_t i = 0; i < m_tx.vout.size(); i++) {
+        if (m_output_data[i].ty == OutputType::OUTPUT_FEE) {
+            m_tx.vout[i].nValue = fee;
+            break;
+        }
+    }
+}
+
+std::optional<Error> TxData::BlindTx(std::string& summary) {
+    // Running total of all blinding factors on the input side of the tx
+    uint256 input_net_bf;
+    // Running total of all blinding factors on the output side of the tx
+    uint256 output_net_bf;
+    // Number of blinding factors on the "output" side of the equation
+    // which we can use for balancing; the final one will have a forced value.
+    //
+    // We count issuance blinding factors as "output bfs" for this accounting,
+    // since they're controllable, even though they actually go on the input
+    // side of the equation.
+    size_t n_output_bf = 0;
+    // List of all input assets (not generators!!) which surjection proofs
+    // refer to. If we know the input asset we can just memcpy it into
+    // place; if not we can just populate this with all-zeroes and the
+    // proving code will ignore it.
+    std::vector<secp256k1_fixed_asset_tag> surjection_assets;
+    // List of all input generators which surjection proofs refer to. These
+    // are consensus-enforced and can't be garbage
+    std::vector<secp256k1_generator> surjection_generators;
+
+    // Compute the net blinding factor for the input side of the equation
+    for (const auto& inp : m_input_data) {
+        if (inp.is_blinded) {
+            int res = secp256k1_netbf_acc(secp256k1_blind_context, input_net_bf.data(), inp.bf_asset.data());
+            assert(res); // both `input_net_bf` and `inp.bf_asset` were computed by us and cannot overflow
+        }
+        // Also determine the assets on the input side of the equation
+        surjection_assets.emplace_back(inp.asset);
+        if (inp.blinded_asset) {
+            surjection_generators.emplace_back(*inp.blinded_asset);
+        } else {
+            surjection_generators.emplace_back(unblinded_generator(inp.asset));
+        }
+        // ...including issuance data
+        if (inp.issuance_asset_data) {
+            if (inp.issuance_asset_data->IsBlinded()) {
+                n_output_bf += 1;
+            }
+            surjection_generators.emplace_back(unblinded_generator(inp.issuance_asset_data->asset));
+        }
+        if (inp.issuance_token_data) {
+            if (inp.issuance_token_data->IsBlinded()) {
+                n_output_bf += 1;
+            }
+            surjection_generators.emplace_back(unblinded_generator(inp.issuance_token_data->asset));
+        }
+    }
+
+    for (size_t i = 0; i < m_tx.vout.size(); i++) {
+        if (m_output_data[i].blind_amount != RangeproofType::NO_RANGEPROOF) {
+            n_output_bf += 1;
+        }
+        // Asset blinding factors count too, *unless* the amount is 0, in which case
+        // the abf does not contribute to the balancing equation and forcing it will
+        // not help us in balancing the tx.
+        if (m_output_data[i].blind_asset && m_tx.vout[i].nValue.GetAmount() != 0) {
+            n_output_bf += 1;
+        }
+    }
+
+    // If there are no blinding factors on the input side...
+    if (input_net_bf.IsNull()) {
+        // ...or on the output side, we're done
+        if (n_output_bf == 0) {
+            return std::nullopt;
+        }
+        // ...but only one bf on the output side, we would've added a dummy output
+        // in MaybePushDummyOutput, then not removed it in DummyBlindTx, so this
+        // situation is impossible.
+        assert(n_output_bf > 1);
+    }
+
+    // Now, run through the outputs, blinding as we go
+    for (size_t i = 0; i < m_tx.vout.size(); i++) {
+        uint256 net_bf;
+        // First blind the asset, because we need the explicit value to do so
+        if (m_output_data[i].blind_asset) {
+            if (m_output_data[i].value > 0) {
+                n_output_bf--;
+            }
+        }
+
+        // Then blind the amount (we need the confidential asset to do so)
+        switch (m_output_data[i].blind_amount) {
+        case RangeproofType::NO_RANGEPROOF:
+            break;
+        }
+    }
+
+    return std::nullopt;
 }
 
 }

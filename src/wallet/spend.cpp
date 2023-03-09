@@ -1177,7 +1177,6 @@ bool CWallet::CreateTransactionInternal(
         }
     }
     assert(nChangePosInOut != -1);
-    auto change_position = txNew.vout.begin() + nChangePosInOut;
     // end ELEMENTS
 
     // Set token input if reissuing
@@ -1286,6 +1285,7 @@ bool CWallet::CreateTransactionInternal(
     }
 
     // Do "initial blinding" for fee estimation purposes
+    blinding_data.DummyBlindTx();
     TxSize tx_sizes;
     CMutableTransaction tx_blinded = txNew;
     if (blind_details) {
@@ -1301,7 +1301,6 @@ bool CWallet::CreateTransactionInternal(
             return false;
         }
 
-blinding_data.DummyBlindTx();
     UniValue entry(UniValue::VOBJ);
     TxToUniv(CTransaction(blinding_data.GetTx()), uint256(), /* include_addresses */ false, entry);
     std::string jsonOutput = entry.write(4);
@@ -1311,17 +1310,14 @@ blinding_data.DummyBlindTx();
     jsonOutput = entry.write(4);
     tfm::format(std::cout, "%s\n", jsonOutput);
 std::cout << CalculateMaximumSignedTxSize(CTransaction(blinding_data.GetTx()), this, &coin_control).vsize << std::endl;
-std::cout << CalculateMaximumSignedTxSize(CTransaction(tx_blinded), this, &coin_control).vsize << std::endl;
-assert(
-    CalculateMaximumSignedTxSize(CTransaction(blinding_data.GetTx()), this, &coin_control).vsize
-    == CalculateMaximumSignedTxSize(CTransaction(tx_blinded), this, &coin_control).vsize
-);
+std::cout << CalculateMaximumSignedTxSize(CTransaction(tx_blinded), this, &coin_control).vsize << std::endl;;
         tx_sizes = CalculateMaximumSignedTxSize(CTransaction(tx_blinded), this, &coin_control);
         tx_sizes = CalculateMaximumSignedTxSize(CTransaction(blinding_data.GetTx()), this, &coin_control);
     } else {
         tx_sizes = CalculateMaximumSignedTxSize(CTransaction(txNew), this, &coin_control);
     }
     // end ELEMENTS
+    auto& change_position = blinding_data.GetChangeOutput();
 
     // Calculate the transaction fee
     int nBytes = tx_sizes.vsize;
@@ -1330,20 +1326,22 @@ assert(
         return false;
     }
     nFeeRet = coin_selection_params.m_effective_feerate.GetFee(nBytes);
+    const CAmount change_and_fee = change_position.nValue.GetAmount();
+std::cout << " initial fee calc gives  " << nFeeRet << std::endl;
 
     // Subtract fee from the change output if not subtracting it from recipient outputs
     CAmount fee_needed = nFeeRet;
     if (!coin_selection_params.m_subtract_fee_outputs) {
-        change_position->nValue = change_position->nValue.GetAmount() - fee_needed;
+        change_position.nValue = change_position.nValue.GetAmount() - fee_needed;
     }
 
     // We want to drop the change to fees if:
     // 1. The change output would be dust
     // 2. The change is within the (almost) exact match window, i.e. it is less than or equal to the cost of the change output (cost_of_change)
-    CAmount change_amount = change_position->nValue.GetAmount();
-    if (IsDust(*change_position, coin_selection_params.m_discard_feerate) || change_amount <= coin_selection_params.m_cost_of_change)
+    CAmount change_amount = change_position.nValue.GetAmount();
+    if (IsDust(change_position, coin_selection_params.m_discard_feerate) || change_amount <= coin_selection_params.m_cost_of_change)
     {
-        txNew.vout.erase(change_position);
+        blinding_data.DropChangeOutput();
 
         change_pos[nChangePosInOut] = std::nullopt;
         tx_blinded.vout.erase(tx_blinded.vout.begin() + nChangePosInOut);
@@ -1384,16 +1382,18 @@ assert(
         tx_sizes = CalculateMaximumSignedTxSize(CTransaction(tx_blinded), this, &coin_control);
         nBytes = tx_sizes.vsize;
         fee_needed = coin_selection_params.m_effective_feerate.GetFee(nBytes);
+std::cout << " after dropping change fee_needed " << fee_needed << std::endl;
     }
 
     // Update nFeeRet in case fee_needed changed due to dropping the change output
-    if (fee_needed <= map_change_and_fee.at(policyAsset) - change_amount) {
-        nFeeRet = map_change_and_fee.at(policyAsset) - change_amount;
+    if (fee_needed <= change_and_fee - change_amount) {
+        nFeeRet = change_and_fee - change_amount;
+std::cout << " after dropping change set fee output to " << nFeeRet << std::endl;
     }
 
     // Reduce output values for subtractFeeFromAmount
     if (coin_selection_params.m_subtract_fee_outputs) {
-        CAmount to_reduce = fee_needed + change_amount - map_change_and_fee.at(policyAsset);
+        CAmount to_reduce = fee_needed + change_amount - change_and_fee;
         int i = 0;
         bool fFirst = true;
         for (const auto& recipient : vecSend)
@@ -1401,7 +1401,7 @@ assert(
             if (i == nChangePosInOut) {
                 ++i;
             }
-            CTxOut& txout = txNew.vout[i];
+            CTxOut& txout = blinding_data.GetTxVout()[i];
 
             if (recipient.fSubtractFeeFromAmount)
             {
@@ -1447,14 +1447,8 @@ assert(
     }
 
     // ELEMENTS update fee output
-    if (g_con_elementsmode) {
-        for (auto& txout : txNew.vout) {
-            if (txout.IsFee()) {
-                txout.nValue = nFeeRet;
-                break;
-            }
-        }
-    }
+    blinding_data.SetFee(nFeeRet);
+    txNew = blinding_data.GetTx();
 
     // ELEMENTS do actual blinding
     if (blind_details) {

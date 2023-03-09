@@ -144,10 +144,6 @@ struct OutputData {
 };
 
 struct IssuanceData {
-    /** The index of the input this issuance is attached to */
-    size_t input_idx;
-    /** Whether this asset is a (reissuance) token or a issuance */
-    bool is_token;
     /** The unblinded amount */
     CAmount value;
     /** The unblinded asset */
@@ -166,6 +162,8 @@ struct InputData {
     CAmount value;
     /** The unblinded asset */
     CAsset asset;
+    /** The blinded asset, for inputs whose asset is blinded */
+    std::optional<secp256k1_generator> blinded_asset;
     /** Whether this input is blinded, for purposes of CT calculations */
     bool is_blinded;
     /** The asset blinding factor of the input, which may be needed for reissuance  */
@@ -182,6 +180,10 @@ struct InputData {
      * for transaction-balancing calculations. If the amount is unblinded then
      * r will be 0; if the asset is unblinded then s will be 0. */
     uint256 bf_net;
+    /** If this input has a (re)issuance attached, information about that */
+    std::optional<IssuanceData> issuance_asset_data;
+    /** If this input has a (re)issuance attached, information about that */
+    std::optional<IssuanceData> issuance_token_data;
 };
 
 /** A structure containing all the data necessary to track blinding */
@@ -191,8 +193,6 @@ private:
     CMutableTransaction m_tx;
     /** Data associated with each output */
     std::vector<OutputData> m_output_data;
-    /** Data associated with each asset (re)issuance */
-    std::vector<IssuanceData> m_issuance_data;
     /** Data associated with each input */
     std::vector<InputData> m_input_data;
 
@@ -256,11 +256,20 @@ public:
      *  in its place if one would be needed for blinding. */
     void DropChangeOutput(void);
  
+    /** Set the fee output to the specified value */
+    void SetFee(CAmount fee);
+
+    /** Actually blind the underlying transaction */
+    std::optional<Error> BlindTx(std::string& summary);
+
     /** Read-only accessor for the underlying transaction */
     const CMutableTransaction& GetTx(void) const { return m_tx; }
 
-    /** Read-only accessor for the policy change output of the underlying transaction */
-    const CTxOut& GetChangeOutput(void) const {
+    /** Mutable accessor for the transaction's outputs */
+    std::vector<CTxOut>& GetTxVout(void) { return m_tx.vout; }
+
+    /** Mutable accessor for the policy change output of the underlying transaction */
+    CTxOut& GetChangeOutput(void) {
         for (unsigned int i = 0; i < m_output_data.size(); i++) {
             if (m_output_data[i].ty == OutputType::OUTPUT_CHANGE_POLICY) {
                 return m_tx.vout[i];
