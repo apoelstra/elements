@@ -113,8 +113,68 @@ impl Generate for elements::OutPoint {
 
 impl Generate for elements::Script {
     fn sample<S: Seeder>(s: &mut S) -> Option<Sampled<Self>> {
+        use elements::opcodes::all::*;
+
         // FIXME have a small fixed set of templates here
-        Vec::<u8>::sample_then_map(s, elements::Script::from)
+        let control = u8::sample(s)?.into_data();
+        if control & 0x80 == 0 {
+            Vec::<u8>::sample_then_map(s, elements::Script::from)
+        } else {
+            let mut builder = elements::script::Builder::new()
+                .push_opcode(OP_RETURN);
+            for _ in 0..control & 0x3f {
+                builder = match u8::sample(s)?.into_data() {
+                    0 => builder.push_opcode(OP_PUSHBYTES_0),
+                    1 => builder.push_opcode(OP_PUSHNUM_1),
+                    2 => builder.push_opcode(OP_PUSHNUM_2),
+                    3 => builder.push_opcode(OP_PUSHNUM_3),
+                    4 => builder.push_opcode(OP_PUSHNUM_4),
+                    5 => builder.push_opcode(OP_PUSHNUM_5),
+                    6 => builder.push_opcode(OP_PUSHNUM_6),
+                    7 => builder.push_opcode(OP_PUSHNUM_7),
+                    8 => builder.push_opcode(OP_PUSHNUM_8),
+                    9 => builder.push_opcode(OP_PUSHNUM_9),
+                    10 => builder.push_opcode(OP_PUSHNUM_10),
+                    11 => builder.push_opcode(OP_PUSHNUM_11),
+                    12 => builder.push_opcode(OP_PUSHNUM_12),
+                    13 => builder.push_opcode(OP_PUSHNUM_13),
+                    14 => builder.push_opcode(OP_PUSHNUM_14),
+                    15 => builder.push_opcode(OP_PUSHNUM_15),
+                    16 => builder.push_opcode(OP_PUSHNUM_16),
+                    17 => builder.push_opcode(OP_PUSHNUM_NEG1),
+                    18 => builder.push_opcode(OP_RESERVED),
+                    19 => builder.push_opcode(OP_NOP), // first non-push opcode
+                    20 => builder.push_opcode(OP_RETURN), // also a non-push opcode
+                    x @ 20..=94 => {
+                        // All lengths from 1 to 75 (0 is covered above in PUSHBYTES_0)
+                        let len = x - 19;
+                        let sl = vec![0xcd, len];
+                        builder.push_slice(&sl)
+                    }
+                    x @ 95.. => {
+                        // Lengths from 4 up to 104684 which will push us into PUSHBYTES4 territory
+                        let len = 4 * (x - 94) * (x - 94);
+                        let sl = vec![0xcd, len];
+                        builder.push_slice(&sl)
+                    }
+                }
+
+            }
+
+            let mut data = builder.into_script();
+            if control & 0x40 == 0 {
+                // Randomly chop script in half which should result in broken
+                // pushes (going off the end of the script), which is important
+                // to test.
+                let mut v = data.into_bytes();
+                v.truncate(v.len() / 2);
+                data = elements::Script::from(v);
+            }
+            Some(Sampled {
+                size: data.len(),
+                data,
+            })
+        }
     }
 }
 
@@ -289,6 +349,8 @@ impl Generate for elements::TxInWitness {
         let f2 = Generate::sample(s)?;
         let f3 = Generate::sample(s)?;
         let f4 = Generate::sample(s)?;
+
+        // pegin witness is a vec<vec<u8>> but should be awell formed pegin
         Some(Sampled {
             data: elements::TxInWitness {
                 amount_rangeproof: f1.data,

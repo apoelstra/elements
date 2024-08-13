@@ -173,13 +173,16 @@ impl Generate for Vec<u8> {
     fn sample<S: Seeder>(s: &mut S) -> Option<Sampled<Self>> {
         let byte1 = s.extract_u8()?;
         let byte2 = s.extract_u8()?;
-        let size = (usize::from(byte1 & 0x0f) << 8) + usize::from(byte2);
-        assert!(size < 0x1000);
+        let size = (usize::from(byte1 & 0x03) << 8) + usize::from(byte2);
+        assert!(size < 0x400);
 
-        let mut rng_byte = byte1 >> 4;
+        let rng_mul = s.extract_u8()?;
+        let rng_add = s.extract_u8()?;
+        let mut rng_byte = s.extract_u8()?;
+
         let mut data = Vec::with_capacity(size);
         for _ in 0..size {
-            rng_byte = rng_byte.wrapping_mul(91).wrapping_add(7);
+            rng_byte = rng_byte.wrapping_mul(rng_mul).wrapping_add(rng_add);
             data.push(rng_byte);
         }
         Some(Sampled { data, size })
