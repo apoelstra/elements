@@ -101,7 +101,6 @@ impl Generate for elements::OutPoint {
             let pegin_mask = control & 0x80 == 0x80; // FIXME cannot generate pegins
             let issuance_mask = control & 0x40 == 0x40;
 
-            let pegin_mask = false;
             let vout = ((u32::from(control) & 0x3f) >> 2)
                 + 0x40000000 * u32::from(pegin_mask)
                 + 0x80000000 * u32::from(issuance_mask);
@@ -147,16 +146,21 @@ impl Generate for elements::Script {
                     20 => builder.push_opcode(OP_RETURN), // also a non-push opcode
                     x @ 20..=94 => {
                         // All lengths from 1 to 75 (0 is covered above in PUSHBYTES_0)
-                        let len = x - 19;
-                        let sl = vec![0xcd, len];
+                        let len = usize::from(x) - 19;
+                        let sl = vec![0xcd; len];
                         builder.push_slice(&sl)
                     }
                     x @ 95.. => {
                         // Lengths from 4 up to 104684 which will push us into PUSHBYTES4 territory
-                        let len = 4 * (x - 94) * (x - 94);
-                        let sl = vec![0xcd, len];
+                        let len = 4 * (usize::from(x) - 94) * (usize::from(x) - 94);
+                        let sl = vec![0xcd; len];
                         builder.push_slice(&sl)
                     }
+                };
+
+                // We want to hit PUSHDATA4 etc but no need to be stupid about it.
+                if builder.len() > 0x1000 {
+                    break;
                 }
 
             }
@@ -343,21 +347,58 @@ impl Generate for elements::secp256k1_zkp::SurjectionProof {
     }
 }
 
-impl Generate for elements::TxInWitness {
+struct WithPegin(elements::TxInWitness);
+struct WithoutPegin(elements::TxInWitness);
+
+impl Generate for WithPegin {
     fn sample<S: Seeder>(s: &mut S) -> Option<Sampled<Self>> {
+        let f1 = Generate::sample(s)?;
+        let f2 = Generate::sample(s)?;
+        // The claim script, transaction and merkle proof here are all wildly invalid and would
+        // be rejected by consensus logic before getting close to the Simplicity interpreter.
+        // BUT all the Simplicity interpreter assumes is that they're present (and actually I
+        // don't even think it assumes that). So to save time/effort we just put garbage here
+        // which meets some minimum length sanity thresholds.
+        let pegin_witness = vec![
+            vec![1, 2, 3, 4, 5, 6, 7, 8], // value
+            vec![0x55; 32], // asset ID
+            vec![0x22; 32], // genesis hash
+            vec![0x11; 99], // claim script
+            vec![0x12; 99], // transaction
+            vec![0x13; 99], // merkle proof
+        ];
+        let pegin_witness_size = pegin_witness.iter().map(Vec::len).sum::<usize>();
+        let f4 = Generate::sample(s)?;
+
+        Some(Sampled {
+            data: WithPegin(elements::TxInWitness {
+                amount_rangeproof: f1.data,
+                inflation_keys_rangeproof: f2.data,
+                pegin_witness,
+                script_witness: f4.data,
+            }),
+            size: f1.size + f2.size + pegin_witness_size + f4.size,
+        })
+    }
+}
+
+impl Generate for WithoutPegin {
+    fn sample<S: Seeder>(s: &mut S) -> Option<Sampled<Self>> {
+        // Without a pegin, we can just generate random crap for the
+        // pegin witness (and we might as well). With a pegin, it
+        // needs to be well-formed.
         let f1 = Generate::sample(s)?;
         let f2 = Generate::sample(s)?;
         let f3 = Generate::sample(s)?;
         let f4 = Generate::sample(s)?;
 
-        // pegin witness is a vec<vec<u8>> but should be awell formed pegin
         Some(Sampled {
-            data: elements::TxInWitness {
+            data: WithoutPegin(elements::TxInWitness {
                 amount_rangeproof: f1.data,
                 inflation_keys_rangeproof: f2.data,
                 pegin_witness: f3.data,
                 script_witness: f4.data,
-            },
+            }),
             size: f1.size + f2.size + f3.size + f4.size,
         })
     }
@@ -372,15 +413,18 @@ impl Generate for elements::TxIn {
             is_pegin = false;
             is_issuance = false;
         } else {
-            is_pegin = false; // FIXME need to generate valid pegins to pass IsValidPeginWitness
-                              //is_pegin = outpoint.vout & (1 << 30) != 0;
+            is_pegin = outpoint.data.vout & (1 << 30) != 0;
             is_issuance = outpoint.data.vout & (1 << 31) != 0;
             outpoint.data.vout &= 0x3fffffff;
         }
 
         let f4 = Generate::sample(s)?;
         let f5 = Generate::sample(s)?;
-        let f6 = Generate::sample(s)?;
+        let f6 = if is_pegin {
+            WithPegin::sample_then_map(s, |x| x.0)?
+        } else {
+            WithoutPegin::sample_then_map(s, |x| x.0)?
+        };
         Some(Sampled {
             data: elements::TxIn {
                 is_pegin,

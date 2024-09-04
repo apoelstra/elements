@@ -16,10 +16,10 @@ simplicity-sys = { package = "simplicity-sys", version = "0.2.0", default-featur
 honggfuzz = { version = "0.5.56", optional = true, default-features = false }
 libfuzzer-sys = "0.4"
 
-#[[bin]]
-#name = "fuzz_transaction"
-#path = "src/fuzz_transaction.rs"
-#required-features = [ "honggfuzz" ]
+[[bin]]
+name = "fuzz_transaction"
+path = "src/fuzz_transaction.rs"
+required-features = [ "honggfuzz" ]
 
 #[[bin]]
 #name = "fuzz_simplicity"
