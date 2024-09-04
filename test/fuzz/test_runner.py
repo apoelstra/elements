@@ -17,6 +17,7 @@ import sys
 def get_fuzz_env(*, target, source_dir):
     return {
         'FUZZ': target,
+        'LD_LIBRARY_PATH': 'src',
         'UBSAN_OPTIONS':
         f'suppressions={source_dir}/test/sanitizer_suppressions/ubsan:print_stacktrace=1:halt_on_error=1:report_error_type=1',
         'ASAN_OPTIONS':  # symbolizer disabled due to https://github.com/google/sanitizers/issues/1364#issuecomment-761072085
@@ -295,12 +296,16 @@ def parse_test_list(*, fuzz_bin):
     test_list_all = subprocess.run(
         fuzz_bin,
         env={
-            'PRINT_ALL_FUZZ_TARGETS_AND_ABORT': ''
+            'PRINT_ALL_FUZZ_TARGETS_AND_ABORT': '',
+            'LD_LIBRARY_PATH': 'src'
         },
         stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
         universal_newlines=True,
-    ).stdout.splitlines()
+    )
+    print("STDOUT ", test_list_all.stdout)
+    print("STDERR ", test_list_all.stderr)
+    test_list_all = test_list_all.stdout.splitlines()
     return test_list_all
 
 

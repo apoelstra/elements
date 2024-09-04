@@ -235,7 +235,7 @@ public:
         if (fHasAssetIssuance) {
             s >> assetIssuance;
             if (assetIssuance.IsNull()) {
-                throw std::ios_base::failure("Superfluous issuance record");
+                throw std::ios_base::failure("Superfluous issuance record 1");
             }
         } else {
             assetIssuance.SetNull();
@@ -390,7 +390,7 @@ inline void UnserializeTransaction(TxType& tx, Stream& s) {
             s >> tx.witness;
             if (!tx.HasWitness()) {
                 /* It's illegal to encode witnesses when all witness stacks are empty. */
-                throw std::ios_base::failure("Superfluous witness record");
+                throw std::ios_base::failure("Superfluous witness record 2");
             }
         }
     } else {
@@ -425,7 +425,7 @@ inline void UnserializeTransaction(TxType& tx, Stream& s) {
 
             if (!tx.HasWitness()) {
                 /* It's illegal to encode witnesses when all witness stacks are empty. */
-                throw std::ios_base::failure("Superfluous witness record");
+                throw std::ios_base::failure("Superfluous witness record 3");
             }
         }
         s >> tx.nLockTime;

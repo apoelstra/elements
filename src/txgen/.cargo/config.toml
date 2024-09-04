@@ -1,0 +1,12 @@
+
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source."git+https://github.com/apoelstra/rust-simplicity?branch=master"]
+git = "https://github.com/apoelstra/rust-simplicity"
+branch = "master"
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "vendor"
+

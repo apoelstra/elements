@@ -78,6 +78,8 @@ src/qt/bitcoin-qt.includes
 *.trs
 *.dmg
 *.iso
+!src/txgen/vendor/**/*.dat
+!src/txgen/vendor/**/*.log
 
 *.json.h
 *.raw.h
@@ -86,6 +88,7 @@ src/qt/bitcoin-qt.includes
 *.patch
 !contrib/guix/patches/*.patch
 !depends/patches/**/*.patch
+!src/txgen/vendor/**/*.patch
 
 #libtool object files
 *.lo
@@ -95,6 +98,7 @@ src/qt/bitcoin-qt.includes
 *.qm
 Makefile
 !depends/Makefile
+!src/txgen/vendor/**/Makefile
 src/qt/elements-qt
 Elements-Qt.app
 
@@ -111,6 +115,7 @@ qrc_*.cpp
 # Mac specific
 .DS_Store
 build
+!src/txgen/vendor/**/build
 
 # Previous releases
 releases
@@ -151,3 +156,8 @@ osx_volname
 dist/
 
 /guix-build-*
+
+# rust
+src/txgen/target/
+src/txgen/hfuzz_target/
+src/txgen/hfuzz_workspace/

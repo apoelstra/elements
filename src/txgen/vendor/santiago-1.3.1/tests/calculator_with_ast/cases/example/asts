@@ -1,0 +1,36 @@
+---
+BinaryOperation(
+    [
+        BinaryOperation(
+            [
+                Int(
+                    1,
+                ),
+                OperatorAdd,
+                BinaryOperation(
+                    [
+                        BinaryOperation(
+                            [
+                                Int(
+                                    2,
+                                ),
+                                OperatorMultiply,
+                                Int(
+                                    3,
+                                ),
+                            ],
+                        ),
+                        OperatorDivide,
+                        Int(
+                            6,
+                        ),
+                    ],
+                ),
+            ],
+        ),
+        OperatorSubtract,
+        Int(
+            7,
+        ),
+    ],
+)

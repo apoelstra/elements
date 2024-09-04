@@ -1,0 +1,207 @@
+2023-09-21 - Version 2.6
+       - Pastis patch
+       - env NO_COLOR support
+       - fix problems with linux/bfd ```init_disassemble_info```
+       - Support ```--exit_on_time```
+       - ```strlcat``` supported in libhfuzz/memorycmp
+       - Some patches for MacOSX, sadly no support for ARM yet
+       - added missing ```add missing disassemble_free_target()```
+       - using ```rfork()``` under FreeBSD
+       - support for enabling/disabling ASLR under FreeBSD
+
+2022-01-01 - Version 2.5
+        - fixed build for Android NDK >= 23
+        - fixed build for CygWin
+        - improved hfuzz-cc, so it supports -x<language> correctly
+        - error returned if unknown cmd-line parameters are provided
+        - support for thread CPU pinning
+        - various fixes for *BSD
+        - increased number of dictionary entries (to 8192)
+
+2021-02-24 - Version 2.4
+        - better NetBSD support (compatiblity)
+        - fixed mangle_getLen() #360
+        - disabled --linux_net_ns by default, as the Linux kernel dies under heavy load of new net namespaces
+        - added support for address compression in IntelPT mode
+        - simplified input_skipFactor() which now yields better results (faster coverage acquisition)
+        - added --save_smaller for the use with Rust fuzzing
+        - fixed Android build under MacOSX
+        - simplified some mangle() functions
+
+2020-07-22 - Version 2.3
+        - honggfuzz.h - split run_t into substructs
+        - clang-format options in .clang-format
+        - added missing mutex initializers
+        - removed unncessary comparisons to 'true' and 'false'
+        - improved NetBSD compatibility
+        - removed unnecessary memory fences (speed ups)
+        - faster searching through the binary for const 4/8-byte values
+        - removed unnecessary includes with iwyu
+        - libhfnetdriver - general improvements around local socket fuzzing and timeouts
+
+2020-04-24 - Version 2.2
+        - Added 8bitcnt instrumentation - use hfuzz-cc/hfuzz-8bitcnt-(gcc|clang) for that
+        - PC-guard instrumentation now uses edge counting
+        - --experimental_const_feedback is now set to true by default
+        - additional string instrumentation wrappers: glib, lcms
+        - additional mutators: splicing, changing ascii numbers
+        - additional integer comparison instrumentation (adding integers to the dynamic dictionary)
+        - fixed linking with ld.lld
+        - removed `sanitizer-coverage-prune-blocks` from hfuzz-cc.c
+        - most mutators have now either overwrite or insert versions
+        - fixed memory barriers in libhfuzz/
+        - implemented skip_factor which dictates how often a given input is fuzzed
+        - lowered the default timeout to 1 second
+        - honggfuzz now uses microseconds, instead of milliseconds across the code
+        - added some new functions to libhfcommon/files
+        - enabled more aggressive inlining in hfuzz-cc/
+        - fixed compilation dependency under MacOS X
+
+2020-03-03 - Version 2.1
+        - string/int comparison enabled for targets built with *SAN, but w/o hfuzz-cc
+        - Parallel work made faster by using faster ATOMIC constructs (check first, then update)
+        - Implement --experimental_const_feedback - const string/integer feedback (used as an additional dictionary)
+        - Sanitizer report files are "better"-deleted (i.e. based on PID and not TID)
+        - New patches for fuzzing added (e.g. for bind-9.16.0/9.15.7)
+        - Buffered output enabled in display.c
+        - Some functions moved from per-arch arch.c to common subproc.c
+        - Compilation under MacOS X 10.15 (Catalina) is now supported
+        - Added suport for bfd/binutils-2.33
+
+2019-12-07 - Version 2.0
+        - Coverage-based corpus minimizer with '-M'
+        - QEmu mode: coverage feedback for Linux binaries
+        - *SAN sanitizer stack-parsing improved for Linux and for POSIX
+        - Move signal functionality to libhfcommon/
+        - Fixed Android builds with newer unwind and capstone
+        - NetDriver: more functionality - e.g. specifying custom addresses and custom tmpfs mount points
+        - Examples: for /usr/bin/file, newer ISC Bind patch, improved OpenSSL code
+
+2019-05-22 - Version 1.9
+        - Don't include netdriver if not needed
+        - Updated examples (bind/openssl)
+        - Add missing TEMP_FAILURE_RETRY() wrappers
+        - Add additional _HF_STATE_DYNAMIC_SWITCH_TO_MAIN state
+
+2019-02-23 - Version 1.8
+        - Native support for NetBSD
+        - Multiple smaller changes wrt threading - e.g. introducing the signal thread
+        - Removed the support for -p (pid fuzzing), honggfuzz net driver, or persistent fuzzing mode should be used instead
+        - Reimplementation of memory comparison routines, now verified with glibc's test-suite
+        - Improved hfuzz-cc/clang/gcc - e.g. for the MacOSX platform, also using -fno-sanitize=fuzzer if -fsanitize=fuzzer is specified, + some samba code wrappers
+        - Examples: new corpora for some of those, new patch for ISC Bind (9.13.5)
+
+2018-08-23 - Version 1.7
+        - Native support for NetBSD
+        - ASCII only fuzzing
+        - Updated corpora for ISC Bind
+        - Printing final stats upon exit
+        - Refreshed support for Intel PT
+        - Support for __sanitizer_cov_trace_div
+        - Updated fuzzing examples for OpenSSL
+
+2018-04-19 - Version 1.6 (rev aeaad48)
+        - Fixed Dockerfile
+        - Fixed a few format problems with file reporting
+        - Updated display formatting
+        - Make it work under WSL (Windows Subsystem for Linux)
+
+2018-02-22 - Version 1.5 (rev 3b1b70b)
+        - Persistent fuzzing now works with MacOS-X
+        - Fixed some examples/ to make it work with MacOS-X
+        - Should compile cleanly with newer MacOS-X versions
+
+2018-02-07 - Version 1.4 (rev 28c7d9e)
+        - Socketfuzzer by @dobin
+        - TCP fuzzer (HonggFuzzer NetDriver) in libhfnetdriver
+        - Display: changed layout a bit
+        - Fix some compilation isuses for MacOS-X
+        - Make it compile with OpenBSD
+        - Better examples/ dir: Apache HTTP, ISC Bind
+        - Added persistent and netdriver signatures
+        - Added missing symbols for newer -fsanitize-coverage (const)
+        - Changed internal structures (global vs run)
+        - Android: Make it compile with newer SDKs
+
+2017-12-09 - Version 1.3 (rev dd9f149)
+        - Software instrumentation - support for cmp_const __sanitizer_cov_trace_const funcs
+        - Refreshed (mostly) OpenSSL corpora
+        - Mangling: additional function for ASCII numbers
+        - Support for RLIMIT_DATA limiting
+        - Better UI scrolling
+        - Simplified Intel PT decoder
+        - Removed defer{} / fblocks from libhfuzz
+        - Google-style intendation with clang-format
+        - Faster locks over global corpora of files
+
+2017-11-01 - Version 1.2 (rev 8e04633)
+        - Software-based coverage feedback (-z) is now enabled by default, can be disabled with (-x)
+        - Better sigprocmask manipulation before executing a process
+        - Updated fuzzing corpora for ssl packages
+        - Updated Apache HTTPD compilation script/patch, corpora, config and string instrumentation
+        - Updated ISC Bind config and fuzzing corpora
+        - Fixes for the Android build (thanks to Zach Riggle and Anestis Bechtsoudis)
+        - Indentation fixes, now clang-format is used
+
+2017-06-23 - Version 1.1 (rev ee3a530)
+        - Simplified and improved hfuzz_cc compiler
+        - More string instrumentation in libhfuzz
+        - Android: works with Android-NDK 15 and newer only
+        - Dockerfile
+        - Refreshed docs
+        - Linux: Faster BTS/PT due to less PMU state resets
+        - Linux: tests and by-pass for the Linux' fork-when-multithreaded problem
+        - libFuzzer/AFL style dictionaries
+        - Runnable under docker/oss-fuzz
+
+2017-05-23 - Version 1.0 (rev 4332ae9)
+        - Multiple stability improvements for most of the supported architectures
+        - More examples in examples/ (e.g. Linux kernel IP for BTS/PT)
+        - Documentation updates
+        - Added honggfuzz compiler wrapper in hfuzz_cc/
+        - Reworked buffer mangling logic
+
+2016-02-14 - Version 0.9 (rev b0d1118)
+        - Clang >= 4.0 -fsanitize-coverage=trace-pc-guard,indirect-calls,trace-cmp support
+        - Multiple examples in examples/
+        - --pprocess_cmd for input post-processing
+
+2016-09-01 - Version 0.8 (rev 6b9efac)
+        - Clang >= 4.0 -fsanitize-coverage=trace-pc,indirect-calls,trace-cmp support
+        - GCC/Clang -finstrument-functions support
+        - Persistent fuzzing mode (-P) for Linux and POSIX
+        - Mutiple smaller fixes (display, stability)
+
+2016-03-15 - Version 0.7 (rev 6d01e82)
+        - Asan code-coverage (SANCOV) available for all platforms (incl. Windows)
+        - Support for Intel PT under Linux v4.0 and newer (and Broadwell/Skylake/newer Intel CPUs)
+        - Should work under: Linux, FreeBSD, Mac OS X, Windows/Cygwin, possibly other POSIX-compliant systems
+
+2015-08-14 - Version 0.6 (rev aa61adb)
+        - Improvements to feedback-driven fuzzing. Using bloom-style filter to record branches (much faster).
+        - Using multiple hardware-assisted feedback signals at once.
+        - Multiple small things: usage notes, logging
+
+2015-02-26 - Version 0.5 (revision 284)
+        - Feedback-driven fuzzing on Linux (using Intel's BTS with Linux perf infrastructure for branch counting) (-Dp option)
+        - Compiles cleanly and works under FreeBSD 10.1
+        - Uses libbfd/libunwind (under Linux) to disassemble offending instructions
+        - Many smaller fixes
+
+2015-02-01 - Version 0.4 (revision 72)
+        - Switch from udis86 to capstone (Capstone is available in many Linux distros as opposed to udis86)
+        - OSX 10.10 support
+        - Many smaller fixes (esp. for MacOS)
+
+2011-07-02 - Version 0.3 (revision 37)
+        - Honggfuzz now allows attaching to an external process (-p) (Linux only)
+        - -f no longer required when -c (external command) is specified
+        - Smaller fixes (typos)
+
+2011-06-02 - Version 0.2 (revision 26)
+        - MacOS fixes (parsing DiagnosticReports) - solves http://code.google.com/p/honggfuzz/issues/detail?id=2
+        - getopt() returns 'int' and not 'char' (could hang the process in a forever-loop)
+        - Formatting changes
+        - Updated comments/usage
+
+2010-12-13 - Initial release 0.1 (revision 13)

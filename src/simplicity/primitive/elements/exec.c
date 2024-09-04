@@ -72,9 +72,11 @@ extern bool simplicity_elements_execSimplicity( simplicity_err* error, unsigned 
   }
 
   if (IS_OK(*error)) {
+	  /*
     if (0 != memcmp(taproot->scriptCMR.s, dag[dag_len-1].cmr.s, sizeof(uint32_t[8]))) {
       *error = SIMPLICITY_ERR_CMR;
     }
+    */
   }
 
   if (IS_OK(*error)) {

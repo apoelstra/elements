@@ -15,6 +15,7 @@
 #  define PRODUCTION_FLAG 0
 #endif
 
+#if 1
 /* Currently Simplicity's assert is the same a C's assert. */
 #define simplicity_assert assert
 
@@ -22,6 +23,10 @@
  * We use an if statement instead of conditional compilation to ensure the condition is type checked, even in PRODUCTION mode.
  */
 #define simplicity_debug_assert(cond) do { if (!PRODUCTION_FLAG) { assert(cond); } } while(0)
+#else
+#define simplicity_assert(cond)
+#define simplicity_debug_assert(cond)
+#endif
 
 /* Defines an UNREACHABLE macro that, if you manage to get into NDEBUG mode, calls '__builtin_unreachable' if it exists. */
 #if (defined NDEBUG) && (defined __hasbuiltin)

@@ -53,7 +53,18 @@ FUZZ_SUITE_LD_COMMON = \
  $(LIBELEMENTSSIMPLICITY) \
  $(MINISKETCH_LIBS) \
  $(EVENT_LIBS) \
- $(EVENT_PTHREADS_LIBS)
+ $(EVENT_PTHREADS_LIBS) \
+ $(LIBTXGEN)
+
+LIBTXGEN=libtxgen.a
+
+$(LIBTXGEN):
+#	cd txgen && RUSTFLAGS="-Cpasses=sancov-module -Cllvm-args=-sanitizer-coverage-level=4 -Cllvm-args=-sanitizer-coverage-inline-8bit-counters -Cllvm-args=-sanitizer-coverage-pc-table -Cllvm-args=-sanitizer-coverage-trace-compares -Cllvm-args=-sanitizer-coverage-stack-depth -C codegen-units=1 -Clinker=clang -Clink-arg=-fuse-ld=lld" LDFLAGS=-fsanitize=fuzzer cargo build --offline --locked --release
+	cd txgen && cargo fuzz build
+	cp txgen/fuzz/target/x86_64-unknown-linux-gnu/release/deps/libtxgen.a .
+#	objcopy --prefix-symbols=txgen_ libtxgen.a
+
+libtxgen_a_SOURCES = $(srcdir)/txgen/src/lib.rs $(srcdir)/txgen/src/generate.rs $(srcdir)/txgen/src/seeder.rs
 
 if USE_UPNP
 FUZZ_SUITE_LD_COMMON += $(MINIUPNPC_LIBS)

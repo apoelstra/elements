@@ -90,7 +90,7 @@ public:
         }
         if (IsNull()) {
             /* It's illegal to encode a witness when all vtxinwit and vtxoutwit entries are empty. */
-            assert(false && "Superfluous witness record");
+            assert(false && "Superfluous witness record 4");
         }
     }
 
@@ -104,7 +104,7 @@ public:
         }
         if (IsNull()) {
             /* It's illegal to encode a witness when all vtxinwit and vtxoutwit entries are empty. */
-            throw std::ios_base::failure("Superfluous witness record");
+            throw std::ios_base::failure("Superfluous witness record 5");
         }
     }
 

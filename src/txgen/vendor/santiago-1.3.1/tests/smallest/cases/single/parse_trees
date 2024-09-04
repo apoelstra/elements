@@ -1,0 +1,6 @@
+---
+Γ := rules "chars"
+  chars := rules "chars" "char"
+    chars := rules 
+    char := lexemes "CHAR"
+      CHAR "a" (1, 1)
