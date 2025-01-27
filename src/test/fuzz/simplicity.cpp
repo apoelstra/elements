@@ -238,11 +238,17 @@ FUZZ_TARGET_INIT(simplicity, initialize_simplicity)
     assert(spent_outs.size() == mtx.vin.size());
 
     // 4. Set up witness data
-    mtx.witness.vtxinwit[nIn].scriptWitness.stack.clear();
-    mtx.witness.vtxinwit[nIn].scriptWitness.stack.push_back(prog_bytes);
-    mtx.witness.vtxinwit[nIn].scriptWitness.stack.push_back(TAPROOT_CONTROL);
-    if (mtx.vin[0].prevout.hash.data()[2] & 1) {
-       mtx.witness.vtxinwit[nIn].scriptWitness.stack.push_back(TAPROOT_ANNEX);
+    size_t old_size = mtx.witness.vtxinwit[nIn].scriptWitness.stack.size();
+    if (!mtx.witness.vtxinwit[nIn].scriptWitness.stack[old_size - 1].empty()
+            && mtx.witness.vtxinwit[nIn].scriptWitness.stack[old_size - 1][0] == 0x50) {
+
+        auto it = mtx.witness.vtxinwit[nIn].scriptWitness.stack.begin() + old_size;
+        mtx.witness.vtxinwit[nIn].scriptWitness.stack.insert(it, TAPROOT_CONTROL);
+        it = mtx.witness.vtxinwit[nIn].scriptWitness.stack.begin() + old_size;
+        mtx.witness.vtxinwit[nIn].scriptWitness.stack.insert(it, prog_bytes);
+    } else {
+        mtx.witness.vtxinwit[nIn].scriptWitness.stack.push_back(prog_bytes);
+        mtx.witness.vtxinwit[nIn].scriptWitness.stack.push_back(TAPROOT_CONTROL);
     }
 
     // 5. Set up Simplicity environment and tx environment
