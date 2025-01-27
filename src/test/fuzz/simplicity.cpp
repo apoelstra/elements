@@ -2,6 +2,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <cstdio>
 #include <span.h>
 #include <primitives/transaction.h>
 extern "C" {
@@ -72,10 +73,26 @@ void initialize_simplicity()
     TAPROOT_CONTROL.insert(TAPROOT_CONTROL.end(), intkey.begin(), intkey.end());
 }
 
+void write_u32(FILE *fh, uint32_t val) {
+    unsigned char buf[4];
+
+    val = htole32(val);
+    memcpy(buf, &val, 4);
+    assert(fwrite(buf, 1, 4, fh) == 4);
+}
+
 FUZZ_TARGET_INIT(simplicity, initialize_simplicity)
 {
     uint32_t budget;
     simplicity_err error;
+
+    /*
+    puts("");
+    puts("");
+    printf("Buffer [%d bytes]: ", (int) buffer.size());
+    for (int i = 0; i < (int) buffer.size(); i++) printf("%02x", buffer[i]);
+    puts("");
+    */
 
     // 1. Initialize seed data by reading from the fuzzer input. This is the
     //    only block of code in which we should be reading fuzzer input.
@@ -136,7 +153,39 @@ FUZZ_TARGET_INIT(simplicity, initialize_simplicity)
         }
 
         seed_data_delete(seed_data);
+ //       printf("Read %d of %d bytes from buffer.\n", (int) ds.size(), (int) buffer.size());
     }
+
+    // 1a. Output everything
+    uint32_t sz;
+    CSHA256 fnameHasher;
+    fnameHasher.Write((const unsigned char*) &budget, sizeof(budget));
+    sz = tx_bytes.size();
+    fnameHasher.Write((const unsigned char*) &sz, sizeof(sz));
+    fnameHasher.Write(tx_bytes.data(), tx_bytes.size());
+    sz = prog_bytes.size();
+    fnameHasher.Write((const unsigned char*) &sz, sizeof(sz));
+    fnameHasher.Write(prog_bytes.data(), prog_bytes.size());
+    sz = wit_bytes.size();
+    fnameHasher.Write((const unsigned char*) &sz, sizeof(sz));
+    fnameHasher.Write(wit_bytes.data(), wit_bytes.size());
+
+    unsigned char hash[32];
+    fnameHasher.Finalize(hash);
+
+    std::string fname = "fuzz_dump/" + HexStr(hash);
+    //printf("  OK -- dumping to %s\n", fname.c_str());
+    FILE *fh = fsbridge::fopen(fname.data(), "w");
+    assert(fh != NULL);
+
+    write_u32(fh, budget);
+    write_u32(fh, tx_bytes.size());
+    assert(fwrite(tx_bytes.data(), 1, tx_bytes.size(), fh) == tx_bytes.size());
+    write_u32(fh, prog_bytes.size());
+    assert(fwrite(prog_bytes.data(), 1, prog_bytes.size(), fh) == prog_bytes.size());
+    write_u32(fh, wit_bytes.size());
+    assert(fwrite(wit_bytes.data(), 1, wit_bytes.size(), fh) == wit_bytes.size());
+    assert(fclose(fh) == 0);
 
     // 2. Construct transaction.
     CMutableTransaction mtx;
@@ -147,6 +196,13 @@ FUZZ_TARGET_INIT(simplicity, initialize_simplicity)
         mtx.witness.vtxinwit.resize(mtx.vin.size());
         mtx.witness.vtxoutwit.resize(mtx.vout.size());
     }
+
+    /*
+    std::cout << "txid: " << HexStr(mtx.GetHash()) << std::endl;
+    std::cout << "wtxid: " << HexStr(CTransaction(mtx).GetWitnessHash()) << std::endl;
+    std::cout << "cmr: " << HexStr(Span{cmr, 32}) << std::endl;
+    std::cout << "amr: " << HexStr(Span{amr, 32}) << std::endl;
+    */
 
     // 3. Construct `nIn` and `spent_outs` array.
     //
@@ -207,6 +263,11 @@ FUZZ_TARGET_INIT(simplicity, initialize_simplicity)
     const transaction* tx = txdata.m_simplicity_tx_data;
     tapEnv* taproot = simplicity_elements_mallocTapEnv(&simplicityRawTap);
     simplicity_elements_execSimplicity(&error, imr, tx, nIn, taproot, GENESIS_HASH.data(), budget, amr, prog_bytes.data(), prog_bytes.size(), wit_bytes.data(), wit_bytes.size());
+    if (imr != NULL) {
+        std::cout << "imr: " << HexStr(Span{imr, 32}) << std::endl;
+    } else {
+        std::cout << "imr: NULL" << std::endl;
+    }
 
     // 5. Secondary test -- try flipping a bunch of bits and check that this doesn't mess things up
     for (size_t j = 0; j < 8 * prog_bytes.size(); j++) {
