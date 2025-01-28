@@ -453,7 +453,7 @@ impl Generate for elements::TxIn {
             outpoint.data.vout &= 0x3fffffff;
         }
 
-        let f4 = Generate::sample(s)?;
+//        let f4 = Generate::sample(s)?;
         let f5 = Generate::sample(s)?;
         let f6 = if is_pegin {
             WithPegin::sample_then_map(s, |x| x.0)?
@@ -469,7 +469,8 @@ impl Generate for elements::TxIn {
                     elements::AssetIssuance::null()
                 },
                 previous_output: outpoint.data,
-                script_sig: f4.data,
+                script_sig: elements::Script::new(), // f4.data, // zero out scriptsig; prevents interpreter
+                                           // from running
                 sequence: f5.data,
                 witness: f6.data,
             },
@@ -477,7 +478,7 @@ impl Generate for elements::TxIn {
                 + mem::size_of::<bool>()
                 + mem::size_of::<elements::AssetIssuance>()
                 + mem::size_of::<elements::OutPoint>()
-                + f4.size
+//                + f4.size
                 + f5.size
                 + f6.size,
         })

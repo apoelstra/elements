@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <span.h>
 #include <primitives/transaction.h>
+#include <script/sigcache.h>
 #include <validation.h>
 extern "C" {
 #include <simplicity/cmr.h>
@@ -41,8 +42,6 @@ CConfidentialAsset INPUT_ASSET_UNCONF{};
 CConfidentialAsset INPUT_ASSET_CONF{};
 CConfidentialValue INPUT_VALUE_UNCONF{};
 CConfidentialValue INPUT_VALUE_CONF{};
-CScript TAPROOT_SCRIPT_PUB_KEY{};
-//CMutableTransaction MTX_TEMPLATE{};
 
 const unsigned int VERIFY_FLAGS = SCRIPT_VERIFY_NONE
     | SCRIPT_VERIFY_P2SH
@@ -58,6 +57,11 @@ const unsigned int VERIFY_FLAGS = SCRIPT_VERIFY_NONE
 void initialize_simplicity()
 {
     g_con_elementsmode = true;
+    // Copied from init.cpp AppInitMain
+    InitSignatureCache();
+    InitScriptExecutionCache();
+    InitRangeproofCache();
+    InitSurjectionproofCache();
 
     GENESIS_HASH = uint256S("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206");
 
@@ -74,10 +78,6 @@ void initialize_simplicity()
     INPUT_ASSET_UNCONF.vchCommitment[0] = 0x01;
     INPUT_ASSET_CONF.vchCommitment = INPUT_VALUE_CONF.vchCommitment;
     INPUT_ASSET_CONF.vchCommitment[0] = 0x0a;
-
-    XOnlyPubKey intkey = XOnlyPubKey{uint256::ONE};
-    XOnlyPubKey extkey = XOnlyPubKey{uint256::ONE};
-    TAPROOT_SCRIPT_PUB_KEY = CScript{} << OP_1 << std::vector<unsigned char>(extkey.begin(), extkey.end());
 }
 
 void write_u32(FILE *fh, uint32_t val) {
@@ -197,7 +197,7 @@ FUZZ_TARGET_INIT(simplicity, initialize_simplicity)
     bool expect_simplicity = false;
     std::vector<unsigned char[32]> cmrs;
     std::vector<CTxOut> spent_outs{};
-    for (unsigned int i = 0; i < mtx.witness.vtxinwit.size(); i++) {
+    for (unsigned int i = 0; i < mtx.vin.size(); i++) {
         // Null asset or value would assert in the interpreter, and are impossible
         // to hit in real transactions. Nonces are not included in the UTXO set and
         // therefore don't matter.
@@ -209,44 +209,49 @@ FUZZ_TARGET_INIT(simplicity, initialize_simplicity)
         // CMR, control block and (maybe) annex, in that order. If the annex is present,
         // then checking for size 4 doesn't guarantee that a witness is present, but
         // that is ok at this point. (In fact, it is a useful thing to check.)
-        auto& current = mtx.witness.vtxinwit[i].scriptWitness.stack;
-        if (current.size() >= 4) {
-            size_t top = current.size();
-            if (!current[top - 1].empty() && current[top - 1][0] == 0x50) {
-                --top;
-            }
-            const auto& control = current[top - 1];
-            const auto& program = current[top - 3];
+        if (i < mtx.witness.vtxinwit.size()) {
+            auto& current = mtx.witness.vtxinwit[i].scriptWitness.stack;
+            if (current.size() >= 4) {
+                size_t top = current.size();
+                if (!current[top - 1].empty() && current[top - 1][0] == 0x50) {
+                    --top;
+                }
+                const auto& control = current[top - 1];
+                const auto& program = current[top - 3];
 
-            if (control.size() >= TAPROOT_CONTROL_BASE_SIZE && (control[0] & 0xfe) == 0xbe) {
-                expect_simplicity = true;
+                if (control.size() >= TAPROOT_CONTROL_BASE_SIZE && (control[0] & 0xfe) == 0xbe) {
+                    // The fuzzer won't be able to produce a valid CMR on its own, so we compute it
+                    // and jam it into the witness stack. But we do require the fuzzer give us a
+                    // place to put it, so we don't have to resize the stack (and so that actual
+                    // valid transactions will work with this code).
+                    // Compute CMR and do some sanity checks on it (and the program)
+                    std::vector<unsigned char> cmr(32, 0);
+                    assert(cmr.size() == 32); // fuck C++
+                    assert(simplicity_computeCmr(&error, cmr.data(), program.data(), program.size()));
+                    if (error == SIMPLICITY_NO_ERROR) {
+                        const XOnlyPubKey internal{Span{control}.subspan(1, TAPROOT_CONTROL_BASE_SIZE - 1)};
 
-                // The fuzzer won't be able to produce a valid CMR on its own, so we compute it
-                // and jam it into the witness stack. But we do require the fuzzer give us a
-                // place to put it, so we don't have to resize the stack (and so that actual
-                // valid transactions will work with this code).
-                // Compute CMR and do some sanity checks on it (and the program)
-                std::vector<unsigned char> cmr(32, 0);
-                assert(cmr.size() == 32); // fuck C++
-                assert(simplicity_computeCmr(&error, cmr.data(), program.data(), program.size()));
-                if (error == SIMPLICITY_NO_ERROR) {
-                    const XOnlyPubKey internal{Span{control}.subspan(1, TAPROOT_CONTROL_BASE_SIZE - 1)};
-
-                    const CScript leaf_script{cmr.begin(), cmr.end()};
-                    const uint256 tapleaf_hash = ComputeTapleafHash(0xbe, leaf_script);
-                    uint256 merkle_root = ComputeTaprootMerkleRoot(control, tapleaf_hash);
-                    auto ret = internal.CreateTapTweak(&merkle_root);
-                    if (ret.has_value()) {
-                        // Just drop the parity; it needs to match the one in the control block,
-                        // but we want to test that logic, so we allow them not to match.
-                        const XOnlyPubKey output_key = ret->first;
-                        // If we made it here, success (aside from parity maybe)
-                        current[top - 2] = std::move(cmr);
-                        scriptPubKey = CScript() << OP_1 << ToByteVector(output_key);
+                        const CScript leaf_script{cmr.begin(), cmr.end()};
+                        const uint256 tapleaf_hash = ComputeTapleafHash(0xbe, leaf_script);
+                        uint256 merkle_root = ComputeTaprootMerkleRoot(control, tapleaf_hash);
+                        auto ret = internal.CreateTapTweak(&merkle_root);
+                        if (ret.has_value()) {
+                            expect_simplicity = true;
+                            //assert(0); // useful for searching for a nontrivial fuzz target
+                            // Just drop the parity; it needs to match the one in the control block,
+                            // but we want to test that logic, so we allow them not to match.
+                            const XOnlyPubKey output_key = ret->first;
+                            if (current[top - 2].size() == 32) {
+                                // FIXME remove this check when we stop using Rust
+                                assert(memcmp(current[top - 2].data(), cmr.data(), 32) == 0);
+                            }
+                            // If we made it here, success (aside from parity maybe)
+                            current[top - 2] = std::move(cmr);
+                            scriptPubKey = CScript() << OP_1 << ToByteVector(output_key);
+                        }
                     }
                 }
             }
-
         }
         // For scripts that we're not using, set them to various witness programs to try to
         // trick the interpreter into treating them as taproot or simplicity outputs. It
@@ -282,7 +287,13 @@ FUZZ_TARGET_INIT(simplicity, initialize_simplicity)
     PrecomputedTransactionData txdata{GENESIS_HASH};
     std::vector<CTxOut> spent_outs_copy{spent_outs};
     txdata.Init(mtx, std::move(spent_outs_copy));
-    assert(expect_simplicity == (txdata.m_simplicity_tx_data != NULL));
+    if (expect_simplicity) {
+        // The converse of this is not true -- if !expect_simplicity, it's still possible
+        // that we will allocate Simplicity data. The check for whether to do this is very
+        // lax: is this a 34-byte scriptPubKey that starts with OP_1 and does it have a
+        // nonempty witness.
+        assert(txdata.m_simplicity_tx_data != NULL);
+    }
 
     const CTransaction tx{mtx};
     for (unsigned i = 0; i < tx.vin.size(); i++) {

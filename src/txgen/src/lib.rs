@@ -17,6 +17,7 @@ mod seeder;
 mod simplicity_utils;
 
 pub use elements;
+pub use elements::hex::ToHex;
 pub use generate::{Generate, Sampled, TestTransaction};
 pub use seeder::Seeder;
 pub use simplicity;
@@ -157,7 +158,7 @@ pub unsafe extern "C" fn seed_data_read_tx(
 
     for input in &mut tx.input {
         let control = sample!(u8, &mut cursor);
-        match control & 3 {
+        match control & 7 {
             0 => {} // leave witness unmodified with random crap on it, or nothing, or whatever
             1 => {
                 // segwit v0
@@ -190,13 +191,13 @@ pub unsafe extern "C" fn seed_data_read_tx(
                 };
                 input.witness.script_witness.push(controlblock.serialize());
                 // ...then the annex
-                if control & 4 == 4 {
+                if control & 8 == 8 {
                     let mut annex = sample!(Vec<u8>, &mut cursor);
                     annex.insert(0, 0x50u8);
                     input.witness.script_witness.push(annex);
                 }
             }
-            4 => {
+            4..8 => {
                 // simplicity taproot scriptspend
                 let node =  sample!(Arc::<simplicity::RedeemNode<simplicity::jet::Elements>>, &mut cursor);
                 let mut prog_iter = simplicity::BitWriter::new(&mut seed_data.prog_data);
@@ -205,6 +206,7 @@ pub unsafe extern "C" fn seed_data_read_tx(
 
                 input.witness.script_witness.push(seed_data.wit_data.clone()); // push the witness
                 input.witness.script_witness.push(seed_data.prog_data.clone()); // push the program
+                input.witness.script_witness.push(node.cmr().to_byte_array().to_vec()); // then the script
                 // ...then the control block
                 let controlblock = elements::taproot::ControlBlock {
                     merkle_branch: sample!(elements::taproot::TaprootMerkleBranch, &mut cursor),
@@ -214,11 +216,14 @@ pub unsafe extern "C" fn seed_data_read_tx(
                 };
                 input.witness.script_witness.push(controlblock.serialize());
                 // ...then the annex
-                if control & 4 == 4 {
+                assert_eq!(input.witness.script_witness[input.witness.script_witness.len() - 1][0] & 0xfe, 0xbe);
+                if control & 8 == 8 {
                     let mut annex = sample!(Vec<u8>, &mut cursor);
                     annex.insert(0, 0x50u8);
                     input.witness.script_witness.push(annex);
+                assert_eq!(input.witness.script_witness[input.witness.script_witness.len() - 2][0] & 0xfe, 0xbe);
                 }
+                assert!(input.witness.script_witness.len() >= 4);
             },
             _ => unreachable!(),
         };
