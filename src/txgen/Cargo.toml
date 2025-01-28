@@ -9,10 +9,10 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [dependencies]
 #elements = { path = "/store/home/apoelstra/code/ElementsProject/rust-elements/2024-06--pegin-parse" }
-elements = { version = "0.24.1", default-features = false }
+elements = { version = "0.25", default-features = false }
 #simplicity = { package = "simplicity-lang", version = "0.2.0", default-features = false, features = [ "elements" ], path = "/store/home/apoelstra/code/BlockstreamResearch/rust-simplicity/2024-06--slab-inference" }
-simplicity = { package = "simplicity-lang", version = "0.2.0", default-features = false, features = [ "elements" ], git = "https://github.com/apoelstra/rust-simplicity", branch = "master" }
-simplicity-sys = { package = "simplicity-sys", version = "0.2.0", default-features = false, features = [ "test-utils" ], git = "https://github.com/apoelstra/rust-simplicity", branch = "master" }
+simplicity = { package = "simplicity-lang", version = "0.3.0", default-features = false, features = [ "elements" ], git = "https://github.com/apoelstra/rust-simplicity", branch = "master" }
+simplicity-sys = { package = "simplicity-sys", version = "0.3.0", default-features = false, features = [ "test-utils" ], git = "https://github.com/apoelstra/rust-simplicity", branch = "master" }
 honggfuzz = { version = "0.5.56", optional = true, default-features = false }
 libfuzzer-sys = "0.4"
 

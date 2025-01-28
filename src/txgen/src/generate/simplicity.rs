@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use super::{Generate, Sampled, Seeder};
 use crate::seeder::u3;
-use crate::simplicity_utils::value_for_type;
+use crate::simplicity_utils::{dummy_elements_env, value_for_type};
 
 use simplicity::dag::{InternalSharing, PostOrderIterItem};
 use simplicity::jet::{Elements, Jet};
@@ -146,11 +146,10 @@ impl Generate for Arc<RedeemNode<Elements>> {
 
         //        println!("{}", wit.data);
         // Set all witness data.
-        wit.data = wit.data.prune_and_retype();
         wit.data = wit
             .data
             .convert::<InternalSharing, _, _>(&mut WitnessPopulator { s })
             .unwrap();
-        Some(wit.map(|data| data.finalize().unwrap()))
+        Some(wit.map(|data| data.finalize_pruned(&dummy_elements_env()).unwrap()))
     }
 }

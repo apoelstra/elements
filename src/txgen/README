@@ -1,0 +1,8 @@
+to update deps:
+
+rm .cargo/config.toml
+run `cargo update` or whatever
+run `cargo update` in fuzz/ directory (DON'T FORGET THIS)
+r
+cun `cargo vendor --versioned-dirs > .cargo/config.toml`
+uncomment .cargo/config.toml
