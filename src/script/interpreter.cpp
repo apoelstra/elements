@@ -15,6 +15,7 @@
 extern "C" {
 #include <simplicity/elements/exec.h>
 #include <simplicity/errorCodes.h>
+#include <simplicity/simplicity_alloc.h>
 }
 
 typedef std::vector<unsigned char> valtype;
@@ -3124,7 +3125,7 @@ bool GenericTransactionSignatureChecker<T>::CheckSimplicity(const valtype& progr
     if (!simplicity_elements_execSimplicity(&error, 0, txdata->m_simplicity_tx_data, nIn, simplicityTapEnv, txdata->m_hash_genesis_block.data(), budget, 0, program.data(), program.size(), witness.data(), witness.size())) {
         assert(!"simplicity_elements_execSimplicity internal error");
     }
-    free(simplicityTapEnv);
+    simplicity_free(simplicityTapEnv);
     switch (error) {
     case SIMPLICITY_NO_ERROR: return set_success(serror);
     case SIMPLICITY_ERR_MALLOC:

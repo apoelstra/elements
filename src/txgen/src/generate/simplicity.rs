@@ -150,6 +150,6 @@ impl Generate for Arc<RedeemNode<Elements>> {
             .data
             .convert::<InternalSharing, _, _>(&mut WitnessPopulator { s })
             .unwrap();
-        Some(wit.map(|data| data.finalize_pruned(&dummy_elements_env()).unwrap()))
+        Some(wit.map(|data| data.finalize_pruned(&dummy_elements_env()).unwrap_or_else(|_| data.finalize_unpruned().unwrap())))
     }
 }

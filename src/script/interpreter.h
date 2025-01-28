@@ -12,6 +12,7 @@
 #include <primitives/transaction.h>
 extern "C" {
 #include <simplicity/elements/env.h>
+#include <simplicity/simplicity_alloc.h>
 }
 
 #include <optional>
@@ -222,7 +223,8 @@ struct PrecomputedTransactionData
     template <class T>
     explicit PrecomputedTransactionData(const T& tx);
     ~PrecomputedTransactionData() {
-        free(m_simplicity_tx_data);
+        if (m_simplicity_tx_data) // FIXME should not be needed, see https://github.com/BlockstreamResearch/rust-simplicity/issues/262
+            simplicity_free(m_simplicity_tx_data);
     }
 };
 
