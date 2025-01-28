@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <span.h>
 #include <primitives/transaction.h>
+#include <validation.h>
 extern "C" {
 #include <simplicity/cmr.h>
 #include <simplicity/elements/env.h>
@@ -41,9 +42,18 @@ CConfidentialAsset INPUT_ASSET_CONF{};
 CConfidentialValue INPUT_VALUE_UNCONF{};
 CConfidentialValue INPUT_VALUE_CONF{};
 CScript TAPROOT_SCRIPT_PUB_KEY{};
-std::vector<unsigned char> TAPROOT_CONTROL{};
-std::vector<unsigned char> TAPROOT_ANNEX{99, 0x50};
 //CMutableTransaction MTX_TEMPLATE{};
+
+const unsigned int VERIFY_FLAGS = SCRIPT_VERIFY_NONE
+    | SCRIPT_VERIFY_P2SH
+    | SCRIPT_VERIFY_WITNESS
+    | SCRIPT_VERIFY_DERSIG
+    | SCRIPT_VERIFY_CHECKLOCKTIMEVERIFY
+    | SCRIPT_VERIFY_CHECKSEQUENCEVERIFY
+    | SCRIPT_VERIFY_TAPROOT
+    | SCRIPT_VERIFY_NULLDUMMY
+    | SCRIPT_SIGHASH_RANGEPROOF
+    | SCRIPT_VERIFY_SIMPLICITY;
 
 void initialize_simplicity()
 {
@@ -68,9 +78,6 @@ void initialize_simplicity()
     XOnlyPubKey intkey = XOnlyPubKey{uint256::ONE};
     XOnlyPubKey extkey = XOnlyPubKey{uint256::ONE};
     TAPROOT_SCRIPT_PUB_KEY = CScript{} << OP_1 << std::vector<unsigned char>(extkey.begin(), extkey.end());
-    // TODO have control block of nontrivial path length
-    TAPROOT_CONTROL.push_back(TAPROOT_LEAF_TAPSIMPLICITY | 1); // 1 is parity
-    TAPROOT_CONTROL.insert(TAPROOT_CONTROL.end(), intkey.begin(), intkey.end());
 }
 
 void write_u32(FILE *fh, uint32_t val) {
@@ -83,38 +90,23 @@ void write_u32(FILE *fh, uint32_t val) {
 
 FUZZ_TARGET_INIT(simplicity, initialize_simplicity)
 {
-    uint32_t budget;
     simplicity_err error;
-
-    /*
-    puts("");
-    puts("");
-    printf("Buffer [%d bytes]: ", (int) buffer.size());
-    for (int i = 0; i < (int) buffer.size(); i++) printf("%02x", buffer[i]);
-    puts("");
-    */
 
     // 1. Initialize seed data by reading from the fuzzer input. This is the
     //    only block of code in which we should be reading fuzzer input.
     std::vector<unsigned char> tx_bytes;
-    std::vector<unsigned char> prog_bytes;
-    std::vector<unsigned char> wit_bytes;
-    unsigned char cmr[32];
-    unsigned char amr[32];
     {
         CDataStream ds(buffer, SER_NETWORK, INIT_PROTO_VERSION);
         std::vector<unsigned char> prog_input;
         std::vector<unsigned char> tx_input;
 
         try {
-            ds >> budget;
             ds >> tx_input;
-            ds >> prog_input;
         } catch (const std::ios_base::failure&) {
             return;
         }
 
-        if (tx_input.size() == 0 || prog_input.size() == 0) {
+        if (tx_input.size() == 0) {
             return;
         }
 
@@ -123,39 +115,15 @@ FUZZ_TARGET_INIT(simplicity, initialize_simplicity)
             seed_data_delete(seed_data);
             return;
         }
-        if (seed_data_read_program(seed_data, prog_input.data(), prog_input.size()) == 0) {
-            seed_data_delete(seed_data);
-            return;
-        }
 
         tx_bytes.assign(
             seed_data_tx_data(seed_data),
             seed_data_tx_data(seed_data) + seed_data_tx_len(seed_data)
         );
-        prog_bytes.assign(
-            seed_data_prog_data(seed_data),
-            seed_data_prog_data(seed_data) + seed_data_prog_len(seed_data)
-        );
-        wit_bytes.assign(
-            seed_data_wit_data(seed_data),
-            seed_data_wit_data(seed_data) + seed_data_wit_len(seed_data)
-        );
-        memcpy(amr, seed_data_amr(seed_data), 32);
-
-        // Compute CMR and do some sanity checks on it (and the program)
-        assert (prog_bytes.size() > 0);
-        assert(simplicity_computeCmr(&error, cmr, prog_bytes.data(), prog_bytes.size()));
-        if (error == SIMPLICITY_NO_ERROR) {
-            assert(!memcmp(cmr, seed_data_cmr(seed_data), 32));
-        } else {
-            assert(error == SIMPLICITY_ERR_FAIL_CODE);
-            memset(cmr, 0, 32);
-        }
-
         seed_data_delete(seed_data);
- //       printf("Read %d of %d bytes from buffer.\n", (int) ds.size(), (int) buffer.size());
     }
 
+#if 0
     // 1a. Output everything
     uint32_t sz;
     CSHA256 fnameHasher;
@@ -186,6 +154,7 @@ FUZZ_TARGET_INIT(simplicity, initialize_simplicity)
     write_u32(fh, wit_bytes.size());
     assert(fwrite(wit_bytes.data(), 1, wit_bytes.size(), fh) == wit_bytes.size());
     assert(fclose(fh) == 0);
+#endif
 
     // 2. Construct transaction.
     CMutableTransaction mtx;
@@ -193,76 +162,136 @@ FUZZ_TARGET_INIT(simplicity, initialize_simplicity)
 
         CDataStream txds{tx_bytes, SER_NETWORK, INIT_PROTO_VERSION};
         txds >> mtx;
-        mtx.witness.vtxinwit.resize(mtx.vin.size());
         mtx.witness.vtxoutwit.resize(mtx.vout.size());
+
+        // If no inputs have witnesses, all the code below should continue to work -- we
+        // should be able to call `PrecomputedTransactionData::Init` on a legacy transaction
+        // without any trouble. In this case it will set txdata.m_simplicity_tx_data to
+        // NULL, and we won't be able to go any further, but there should be no crashes
+        // or memory issues.
+        if (!mtx.witness.vtxinwit.empty()) {
+            mtx.witness.vtxinwit.resize(mtx.vin.size());
+            // This is an assertion in the Simplicity interpreter. It is guaranteed
+            // to hold for anything on the network since (even if validatepegin is off)
+            // pegins are validated for well-formedness long before the script interpreter
+            // is invoked. But in this code we just call the interpreter directly without
+            // these checks.
+            for (unsigned i = 0; i < mtx.vin.size(); i++) {
+                if (mtx.vin[i].m_is_pegin && (mtx.witness.vtxinwit[i].m_pegin_witness.stack.size() < 4 || mtx.witness.vtxinwit[i].m_pegin_witness.stack[2].size() != 32)) {
+                    return;
+                }
+            }
+        }
+
+        // We use the first vin as a "random oracle" rather than reading more from
+        // the fuzzer, because we want our fuzz seeds to have as simple a structure
+        // as possible. This means we must reject 0-input transactions, which are
+        // invalid on-chain anyway.
+        if (mtx.vin.size() == 0) {
+            return;
+        }
     }
+    const auto& random_bytes = mtx.vin[0].prevout.hash;
 
-    /*
-    std::cout << "txid: " << HexStr(mtx.GetHash()) << std::endl;
-    std::cout << "wtxid: " << HexStr(CTransaction(mtx).GetWitnessHash()) << std::endl;
-    std::cout << "cmr: " << HexStr(Span{cmr, 32}) << std::endl;
-    std::cout << "amr: " << HexStr(Span{amr, 32}) << std::endl;
-    */
-
-    // 3. Construct `nIn` and `spent_outs` array.
-    //
-    // Here we extract data from the first input's txid, since the fuzzer already
-    // produced that as a random string which has no other meaning. So to avoid
-    // complicating our seed encoding beyond "transaction then simplicity code"
-    // we just use it as a random source.
-    //
-    // We do skip the first byte since that has pegin/issuance flag in it and
-    // therefore already has semantic information.
-    size_t nIn = mtx.vin[0].prevout.hash.data()[1] % mtx.vin.size();
+    // 3. Construct `nIn` and `spent_outs` arrays.
+    bool expect_simplicity = false;
+    std::vector<unsigned char[32]> cmrs;
     std::vector<CTxOut> spent_outs{};
-    for (unsigned int i = 0; i < mtx.vin.size(); i++) {
+    for (unsigned int i = 0; i < mtx.witness.vtxinwit.size(); i++) {
         // Null asset or value would assert in the interpreter, and are impossible
         // to hit in real transactions. Nonces are not included in the UTXO set and
         // therefore don't matter.
         CConfidentialValue value = i & 1 ? INPUT_VALUE_CONF : INPUT_VALUE_UNCONF;
         CConfidentialAsset asset = i & 2 ? INPUT_ASSET_CONF : INPUT_ASSET_UNCONF;
         CScript scriptPubKey;
-        if (i != nIn) {
-            // For scriptPubKeys we can use arbitrary scripts. We include the empty
-            // script even though in a real transaction this would be impossible,
-            // because it shouldn't break anything.
-            for (unsigned int j = 0; j < i; j++) {
-                scriptPubKey << OP_TRUE;
+
+        // Check for size 4: a Simplicity program will always have a witness, program,
+        // CMR, control block and (maybe) annex, in that order. If the annex is present,
+        // then checking for size 4 doesn't guarantee that a witness is present, but
+        // that is ok at this point. (In fact, it is a useful thing to check.)
+        auto& current = mtx.witness.vtxinwit[i].scriptWitness.stack;
+        if (current.size() >= 4) {
+            size_t top = current.size();
+            if (!current[top - 1].empty() && current[top - 1][0] == 0x50) {
+                --top;
             }
-        } else {
-            scriptPubKey = TAPROOT_SCRIPT_PUB_KEY;
+            const auto& control = current[top - 1];
+            const auto& program = current[top - 3];
+
+            if (control.size() >= TAPROOT_CONTROL_BASE_SIZE && (control[0] & 0xfe) == 0xbe) {
+                expect_simplicity = true;
+
+                // The fuzzer won't be able to produce a valid CMR on its own, so we compute it
+                // and jam it into the witness stack. But we do require the fuzzer give us a
+                // place to put it, so we don't have to resize the stack (and so that actual
+                // valid transactions will work with this code).
+                // Compute CMR and do some sanity checks on it (and the program)
+                std::vector<unsigned char> cmr(32, 0);
+                assert(cmr.size() == 32); // fuck C++
+                assert(simplicity_computeCmr(&error, cmr.data(), program.data(), program.size()));
+                if (error == SIMPLICITY_NO_ERROR) {
+                    const XOnlyPubKey internal{Span{control}.subspan(1, TAPROOT_CONTROL_BASE_SIZE - 1)};
+
+                    const CScript leaf_script{cmr.begin(), cmr.end()};
+                    const uint256 tapleaf_hash = ComputeTapleafHash(0xbe, leaf_script);
+                    uint256 merkle_root = ComputeTaprootMerkleRoot(control, tapleaf_hash);
+                    auto ret = internal.CreateTapTweak(&merkle_root);
+                    if (ret.has_value()) {
+                        // Just drop the parity; it needs to match the one in the control block,
+                        // but we want to test that logic, so we allow them not to match.
+                        const XOnlyPubKey output_key = ret->first;
+                        // If we made it here, success (aside from parity maybe)
+                        current[top - 2] = std::move(cmr);
+                        scriptPubKey = CScript() << OP_1 << ToByteVector(output_key);
+                    }
+                }
+            }
+
+        }
+        // For scripts that we're not using, set them to various witness programs to try to
+        // trick the interpreter into treating them as taproot or simplicity outputs. It
+        // should fail but shouldn't crash or anything.
+        //
+        // We don't cover all cases, so this may result in the empty scriptpubkey -- this is
+        // impossible on-chain but it shouldn't hurt anything.
+        if (scriptPubKey.empty()) {
+            if (i < random_bytes.size()) {
+                switch(random_bytes.data()[i] >> 6) {
+                case 0:
+                    scriptPubKey << OP_TRUE;
+                    break;
+                case 1:
+                    scriptPubKey << OP_0 << std::vector<unsigned char>(20, 0xab);
+                    break;
+                case 2:
+                    scriptPubKey << OP_0 << std::vector<unsigned char>(32, 0xcd);
+                    break;
+                case 3:
+                    scriptPubKey << OP_1 << std::vector<unsigned char>(32, 0xef);
+                    break;
+                }
+            }
         }
 
         spent_outs.push_back(CTxOut{asset, value, scriptPubKey});
     }
     assert(spent_outs.size() == mtx.vin.size());
 
-    // 4. Set up witness data
-    size_t old_size = mtx.witness.vtxinwit[nIn].scriptWitness.stack.size();
-    if (!mtx.witness.vtxinwit[nIn].scriptWitness.stack[old_size - 1].empty()
-            && mtx.witness.vtxinwit[nIn].scriptWitness.stack[old_size - 1][0] == 0x50) {
 
-        auto it = mtx.witness.vtxinwit[nIn].scriptWitness.stack.begin() + old_size;
-        mtx.witness.vtxinwit[nIn].scriptWitness.stack.insert(it, TAPROOT_CONTROL);
-        it = mtx.witness.vtxinwit[nIn].scriptWitness.stack.begin() + old_size;
-        mtx.witness.vtxinwit[nIn].scriptWitness.stack.insert(it, prog_bytes);
-    } else {
-        mtx.witness.vtxinwit[nIn].scriptWitness.stack.push_back(prog_bytes);
-        mtx.witness.vtxinwit[nIn].scriptWitness.stack.push_back(TAPROOT_CONTROL);
-    }
-
-    // 5. Set up Simplicity environment and tx environment
-    rawTapEnv simplicityRawTap;
-    simplicityRawTap.controlBlock = TAPROOT_CONTROL.data();
-    simplicityRawTap.pathLen = (TAPROOT_CONTROL.size() - TAPROOT_CONTROL_BASE_SIZE) / TAPROOT_CONTROL_NODE_SIZE;
-    simplicityRawTap.scriptCMR = cmr;
-
+    // 4. Test via scriptcheck
     PrecomputedTransactionData txdata{GENESIS_HASH};
     std::vector<CTxOut> spent_outs_copy{spent_outs};
     txdata.Init(mtx, std::move(spent_outs_copy));
-    assert(txdata.m_simplicity_tx_data != NULL);
+    assert(expect_simplicity == (txdata.m_simplicity_tx_data != NULL));
 
-    // 4. Main test
+    const CTransaction tx{mtx};
+    for (unsigned i = 0; i < tx.vin.size(); i++) {
+        CScriptCheck check{txdata.m_spent_outputs[i], tx, i, VERIFY_FLAGS, false /* cache */, &txdata};
+        check();
+    }
+
+    // 5. Test directly (including IMR checks)
+#if 0
     unsigned char imr_out[32];
     unsigned char *imr = mtx.vin[0].prevout.hash.data()[2] & 2 ? imr_out : NULL;
 
@@ -284,4 +313,5 @@ FUZZ_TARGET_INIT(simplicity, initialize_simplicity)
 
     // 6. Cleanup
     free(taproot);
+#endif
 }

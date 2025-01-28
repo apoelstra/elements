@@ -99,6 +99,7 @@ pub extern "C" fn seed_data_wit_len(data: &SeedData) -> usize {
     data.wit_data.len()
 }
 
+/*
 /// Accessor for a pointer to the CMR of the program
 #[no_mangle]
 pub extern "C" fn seed_data_cmr(data: &SeedData) -> *const u8 {
@@ -112,7 +113,6 @@ pub extern "C" fn seed_data_amr(data: &SeedData) -> *const u8 {
 }
 
 
-/*
 #[no_mangle]
 pub unsafe extern "C" fn tx_from_seed(
     data: *const u8,
@@ -142,12 +142,88 @@ pub unsafe extern "C" fn seed_data_read_tx(
     input_data: *const u8,
     input_len: usize,
 ) -> usize {
+    macro_rules! sample {
+        ($ty:ty, $cursor:expr) => {
+            match <$ty>::sample($cursor) {
+                Some(data) => data.into_data(),
+                None => return 0,
+            }
+        }
+    }
+
     let input_data = core::slice::from_raw_parts(input_data, input_len);
     let mut cursor = std::io::Cursor::new(input_data);
-    match elements::Transaction::sample(&mut cursor) {
-        Some(tx) => seed_data.tx_data = elements::encode::serialize(tx.data()),
-        None => return 0,
-    };
+    let mut tx = sample!(elements::Transaction, &mut cursor);
+
+    for input in &mut tx.input {
+        let control = sample!(u8, &mut cursor);
+        match control & 3 {
+            0 => {} // leave witness unmodified with random crap on it, or nothing, or whatever
+            1 => {
+                // segwit v0
+                let s = sample!(elements::Script, &mut cursor);
+                input.witness.script_witness.push(s.into_bytes());
+            },
+            2 => {
+                // taproot keyspend
+                let mut sig = sample!([u8; 65], &mut cursor);
+                sig[64] &= 3;
+                input.witness.script_witness.push(sig.to_vec());
+
+                if control & 4 == 4 {
+                    let mut annex = sample!(Vec<u8>, &mut cursor);
+                    annex.insert(0, 0x50u8);
+                    input.witness.script_witness.push(annex);
+                }
+            },
+            3 => {
+                // regular taproot scriptspend
+                // push the program
+                let s = sample!(elements::Script, &mut cursor);
+                input.witness.script_witness.push(s.into_bytes());
+                // ...then the control block
+                let controlblock = elements::taproot::ControlBlock {
+                    merkle_branch: sample!(elements::taproot::TaprootMerkleBranch, &mut cursor),
+                    internal_key: sample!(elements::schnorr::XOnlyPublicKey, &mut cursor),
+                    output_key_parity: sample!(elements::secp256k1_zkp::Parity, &mut cursor),
+                    leaf_version: elements::taproot::LeafVersion::from_u8(0xc4).unwrap(),
+                };
+                input.witness.script_witness.push(controlblock.serialize());
+                // ...then the annex
+                if control & 4 == 4 {
+                    let mut annex = sample!(Vec<u8>, &mut cursor);
+                    annex.insert(0, 0x50u8);
+                    input.witness.script_witness.push(annex);
+                }
+            }
+            4 => {
+                // simplicity taproot scriptspend
+                let node =  sample!(Arc::<simplicity::RedeemNode<simplicity::jet::Elements>>, &mut cursor);
+                let mut prog_iter = simplicity::BitWriter::new(&mut seed_data.prog_data);
+                let mut wit_iter = simplicity::BitWriter::new(&mut seed_data.wit_data);
+                node.encode(&mut prog_iter, &mut wit_iter).unwrap();
+
+                input.witness.script_witness.push(seed_data.wit_data.clone()); // push the witness
+                input.witness.script_witness.push(seed_data.prog_data.clone()); // push the program
+                // ...then the control block
+                let controlblock = elements::taproot::ControlBlock {
+                    merkle_branch: sample!(elements::taproot::TaprootMerkleBranch, &mut cursor),
+                    internal_key: sample!(elements::schnorr::XOnlyPublicKey, &mut cursor),
+                    output_key_parity: sample!(elements::secp256k1_zkp::Parity, &mut cursor),
+                    leaf_version: elements::taproot::LeafVersion::from_u8(0xbe).unwrap(),
+                };
+                input.witness.script_witness.push(controlblock.serialize());
+                // ...then the annex
+                if control & 4 == 4 {
+                    let mut annex = sample!(Vec<u8>, &mut cursor);
+                    annex.insert(0, 0x50u8);
+                    input.witness.script_witness.push(annex);
+                }
+            },
+            _ => unreachable!(),
+        };
+    }
+    seed_data.tx_data = elements::encode::serialize(&tx);
     cursor.position() as usize
 }
 

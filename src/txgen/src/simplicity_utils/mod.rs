@@ -53,3 +53,45 @@ pub fn value_for_type<S: Seeder>(s: &mut S, ty: &types::Final) -> Value {
     //assert_eq!(ret.len(), ty.bit_width());
     ret
 }
+
+#[allow(dead_code)]
+pub fn simplicity_taproot_commitment<C: elements::secp256k1_zkp::Verification>(
+    secp: &elements::secp256k1_zkp::Secp256k1<C>,
+    control_block: &mut elements::taproot::ControlBlock,
+    program_cmr: simplicity::Cmr,
+) -> elements::schnorr::TweakedPublicKey {
+    use elements::hashes::{Hash, HashEngine};
+    use elements::secp256k1_zkp::Scalar;
+    use elements::taproot::{TapLeafHash, TapNodeHash, TapTweakHash};
+
+    // compute the script hash
+    let mut eng = TapLeafHash::engine();
+    eng.input(&[0xbe, 0x20]);
+    eng.input(&program_cmr.to_byte_array());
+    let leaf_hash = TapLeafHash::from_engine(eng);
+    // Initially the curr_hash is the leaf hash
+    let mut curr_hash = TapNodeHash::from_byte_array(leaf_hash.to_byte_array());
+    // Verify the proof
+    for elem in control_block.merkle_branch.as_inner() {
+        let mut eng = TapNodeHash::engine();
+        if curr_hash.as_byte_array() < elem.as_byte_array() {
+            eng.input(curr_hash.as_ref());
+            eng.input(elem.as_ref());
+        } else {
+            eng.input(elem.as_ref());
+            eng.input(curr_hash.as_ref());
+        }
+        // Recalculate the curr hash as parent hash
+        curr_hash = TapNodeHash::from_engine(eng);
+    }
+    // compute the taptweak
+    let tweak = TapTweakHash::from_key_and_tweak(control_block.internal_key, Some(curr_hash));
+    let tweak = Scalar::from_be_bytes(tweak.to_byte_array()).expect("hash value greater than curve order");
+
+    // Update the control block with the parity and return the output key
+    let (output_key, parity) = control_block.internal_key.add_tweak(secp, &tweak).unwrap();
+    control_block.output_key_parity = parity;
+    elements::schnorr::TweakedPublicKey::new(output_key)
+}
+
+

@@ -46,6 +46,41 @@ impl Generate for confidential::Asset {
     }
 }
 
+impl Generate for elements::taproot::TaprootMerkleBranch {
+    fn sample<S: Seeder>(s: &mut S) -> Option<Sampled<Self>> {
+        let len = s.extract_u8()? & 0x7f;
+        let mut data = Vec::with_capacity(32 * usize::from(len));
+        for _ in 0..len {
+            data.extend(<[u8; 32]>::sample(s)?.data().iter().copied());
+        }
+        Some(Sampled {
+            data: elements::taproot::TaprootMerkleBranch::from_slice(&data).unwrap(),
+            size: data.len(),
+        })
+    }
+}
+
+impl Generate for elements::secp256k1_zkp::Parity {
+    fn sample<S: Seeder>(s: &mut S) -> Option<Sampled<Self>> {
+        Generate::sample_then_map(s, |b: u8| if b & 1 == 0 {
+            elements::secp256k1_zkp::Parity::Even
+        } else {
+            elements::secp256k1_zkp::Parity::Odd
+        })
+    }
+}
+
+impl Generate for elements::secp256k1_zkp::XOnlyPublicKey {
+    fn sample<S: Seeder>(s: &mut S) -> Option<Sampled<Self>> {
+        loop {
+            let bytes =  <[u8; 32]>::sample(s)?;
+            if let Ok(t) = elements::secp256k1_zkp::XOnlyPublicKey::from_slice(&bytes.data) {
+                return Some(Sampled::single(t));
+            }
+        }
+    }
+}
+
 impl Generate for elements::secp256k1_zkp::Tweak {
     fn sample<S: Seeder>(s: &mut S) -> Option<Sampled<Self>> {
         loop {
