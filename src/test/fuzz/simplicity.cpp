@@ -24,17 +24,9 @@ extern "C" {
 extern "C" void *seed_data_new(void);
 extern "C" void seed_data_delete(void *);
 
+extern "C" size_t seed_data_read_tx(void *, unsigned char *, size_t);
 extern "C" unsigned char *seed_data_tx_data(void*);
 extern "C" size_t seed_data_tx_len(void*);
-extern "C" unsigned char *seed_data_prog_data(void*);
-extern "C" size_t seed_data_prog_len(void*);
-extern "C" unsigned char *seed_data_wit_data(void*);
-extern "C" size_t seed_data_wit_len(void*);
-extern "C" unsigned char *seed_data_cmr(void*);
-extern "C" unsigned char *seed_data_amr(void*);
-
-extern "C" size_t seed_data_read_tx(void *, unsigned char *, size_t);
-extern "C" size_t seed_data_read_program(void *, unsigned char *, size_t);
 
 uint256 GENESIS_HASH;
 
@@ -123,20 +115,10 @@ FUZZ_TARGET_INIT(simplicity, initialize_simplicity)
         seed_data_delete(seed_data);
     }
 
-#if 0
+#if 1
     // 1a. Output everything
-    uint32_t sz;
     CSHA256 fnameHasher;
-    fnameHasher.Write((const unsigned char*) &budget, sizeof(budget));
-    sz = tx_bytes.size();
-    fnameHasher.Write((const unsigned char*) &sz, sizeof(sz));
     fnameHasher.Write(tx_bytes.data(), tx_bytes.size());
-    sz = prog_bytes.size();
-    fnameHasher.Write((const unsigned char*) &sz, sizeof(sz));
-    fnameHasher.Write(prog_bytes.data(), prog_bytes.size());
-    sz = wit_bytes.size();
-    fnameHasher.Write((const unsigned char*) &sz, sizeof(sz));
-    fnameHasher.Write(wit_bytes.data(), wit_bytes.size());
 
     unsigned char hash[32];
     fnameHasher.Finalize(hash);
@@ -146,13 +128,7 @@ FUZZ_TARGET_INIT(simplicity, initialize_simplicity)
     FILE *fh = fsbridge::fopen(fname.data(), "w");
     assert(fh != NULL);
 
-    write_u32(fh, budget);
-    write_u32(fh, tx_bytes.size());
     assert(fwrite(tx_bytes.data(), 1, tx_bytes.size(), fh) == tx_bytes.size());
-    write_u32(fh, prog_bytes.size());
-    assert(fwrite(prog_bytes.data(), 1, prog_bytes.size(), fh) == prog_bytes.size());
-    write_u32(fh, wit_bytes.size());
-    assert(fwrite(wit_bytes.data(), 1, wit_bytes.size(), fh) == wit_bytes.size());
     assert(fclose(fh) == 0);
 #endif
 
@@ -204,6 +180,14 @@ FUZZ_TARGET_INIT(simplicity, initialize_simplicity)
         CConfidentialValue value = i & 1 ? INPUT_VALUE_CONF : INPUT_VALUE_UNCONF;
         CConfidentialAsset asset = i & 2 ? INPUT_ASSET_CONF : INPUT_ASSET_UNCONF;
         CScript scriptPubKey;
+        if (i < random_bytes.size()) {
+            if (i & 1 && random_bytes.data()[i] & 1) {
+                value.vchCommitment[0] ^= 1;
+            }
+            if (i & 2 && random_bytes.data()[i] & 2) {
+                asset.vchCommitment[0] ^= 1;
+            }
+        }
 
         // Check for size 4: a Simplicity program will always have a witness, program,
         // CMR, control block and (maybe) annex, in that order. If the annex is present,
