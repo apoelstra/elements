@@ -115,7 +115,7 @@ FUZZ_TARGET_INIT(simplicity, initialize_simplicity)
         seed_data_delete(seed_data);
     }
 
-#if 1
+#if 0
     // 1a. Output everything
     CSHA256 fnameHasher;
     fnameHasher.Write(tx_bytes.data(), tx_bytes.size());

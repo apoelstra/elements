@@ -15,7 +15,7 @@ use simplicity::node::{
 use simplicity::types;
 use simplicity::Value;
 
-const MAX_VALUE_BITS: usize = 4 * 1024;
+const MAX_VALUE_BITS: usize = 16 * 1024 * 1024; // exceed ubounded max
 
 impl Generate for Value {
     fn sample<S: Seeder>(s: &mut S) -> Option<Sampled<Self>> {
@@ -68,6 +68,8 @@ impl Generate for simplicity::FailEntropy {
 }
 
 /// Maximum number of nodes in a WitnessNode before we start scaling back.
+const MAX_NODES: usize = 64 * 64;  /* should be enough to crank type sizes waay up */
+
 // You probably don't want to generate this. You probably want to generate
 // a RedeemNode below, which additionally forces the thing to 1-1 and gives
 // you the encode_to_vec function.
@@ -75,9 +77,191 @@ impl Generate for Arc<WitnessNode<Elements>> {
     fn sample<S: Seeder>(s: &mut S) -> Option<Sampled<Self>> {
         type Node = Arc<WitnessNode<Elements>>;
 
+        macro_rules! try_break {
+            ($res:expr) => {
+                match $res {
+                    Some(x) => x,
+                    None => break,
+                }
+            };
+        }
+
+        // We build recursive structures by maintaining a stack of three elements.
+        // If there are less than 3, we add a leaf node. If there are three, then
+        // we combine a fuzzer-guided pair of them in a fuzzer-guided order with
+        // a fuzzer-guided combinator.
+
         let ctx = types::Context::new();
-        u16::sample_then_map(s, |n| {
-            Node::jet(&ctx, Elements::ALL[usize::from(n) % Elements::ALL.len()])
+        let mut stack = vec![];
+        for _ in 0..MAX_NODES / 8 {
+            let one_child = !stack.is_empty();
+
+            let x = try_break!(s.extract_u8());
+            if stack.len() < 3 {
+                match x {
+                    0 => stack.push((1, Node::unit(&ctx))),
+                    1 => stack.push((1, Node::iden(&ctx))),
+                    2 => {
+                        let word: Sampled<Value> = try_break!(Generate::sample(s));
+                        stack.push((1, Node::scribe(&ctx, &word.data)))
+                    }
+                    3 => {
+                        let ent = simplicity::FailEntropy::from_byte_array([
+                            0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef,
+                            0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef,
+                            0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef,
+                            0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef,
+                            0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef,
+                            0xde, 0xad, 0xbe, 0xef,
+                        ]);
+                        stack.push((1, Node::fail(&ctx, ent)))
+                    }
+                    4 => {
+                        // Note: we set the witness to None here. When sampling a RedeemNode,
+                        // with all types present, we will populate the witness with the right
+                        // type.
+                        stack.push((1, Node::witness(&ctx, None)))
+                    }
+                    5 if one_child => {
+                        let (size, child) = stack.pop().unwrap();
+                        stack.push((size + 1, Node::injl(&child)));
+                    }
+                    6 if one_child => {
+                        let (size, child) = stack.pop().unwrap();
+                        stack.push((size + 1, Node::injr(&child)));
+                    }
+                    7 if one_child => {
+                        let (size, child) = stack.pop().unwrap();
+                        stack.push((size + 1, Node::drop_(&child)));
+                    }
+                    8 if one_child => {
+                        let (size, child) = stack.pop().unwrap();
+                        stack.push((size + 1, Node::take(&child)));
+                    }
+                    // asserts require that child source target be a product.If they fail, fall back to take/drop
+                    9 if one_child => {
+                        let (size, child) = stack.pop().unwrap();
+                        let cmr = try_break!(Generate::sample(s)).data;
+                        stack.push((size + 2, Node::assertl(&Node::take(&child), cmr).unwrap()));
+                    }
+                    10 if one_child => {
+                        let (size, child) = stack.pop().unwrap();
+                        let cmr = try_break!(Generate::sample(s)).data;
+                        stack.push((size + 2, Node::assertr(cmr, &Node::take(&child)).unwrap()));
+                    }
+                    // Have a "break early" condition so we're not always making max-size objects
+                    11 if one_child => break,
+                    x => {
+                        let idx = ((usize::from(x >> 4) << 8)
+                            + usize::from(try_break!(s.extract_u8())))
+                            % Elements::ALL.len();
+                        stack.push((1, Node::jet(&ctx, Elements::ALL[idx])))
+                    }
+                }
+            } else if stack.len() == 3 {
+                let stack1 = stack.pop().unwrap();
+                let stack2 = stack.pop().unwrap();
+                let stack3 = stack.pop().unwrap();
+                debug_assert!(stack.is_empty());
+                let children = match x & 0x0f {
+                    1 => {
+                        stack.push(stack3);
+                        (stack1, stack2)
+                    }
+                    2 => {
+                        stack.push(stack2);
+                        (stack1, stack3)
+                    }
+                    3 => {
+                        stack.push(stack3);
+                        (stack2, stack1)
+                    }
+                    4 => {
+                        stack.push(stack1);
+                        (stack2, stack3)
+                    }
+                    5 => {
+                        stack.push(stack2);
+                        (stack3, stack1)
+                    }
+                    6 => {
+                        stack.push(stack1);
+                        (stack3, stack2)
+                    }
+                    _ => {
+                        stack.push(stack3);
+                        stack.push(stack2);
+                        stack.push(stack1);
+                        break;
+                    }
+                };
+
+                let (lsize, lchild) = children.0;
+                let (rsize, rchild) = children.1;
+                match x >> 4 {
+                    0 => {
+                        // Comp requires lchild target == rchild source. We make one A x _ and the
+                        // other _ x B.
+                        let lchild = Node::pair(&lchild, &Node::witness(&ctx, None)).unwrap();
+                        let rchild = Node::drop_(&rchild);
+                        let node = Node::comp(&lchild, &rchild).unwrap();
+                        stack.push((lsize + rsize + 4, node));
+                    }
+                    1 => {
+                        // Pair requires both source types be producted by the same thing, and
+                        // both target types to be the same. To make the targets be the same
+                        // we can just pair by a witness on each side.
+                        let lchild = Node::pair(&lchild, &Node::witness(&ctx, None)).unwrap();
+                        let rchild = Node::pair(&Node::witness(&ctx, None), &rchild).unwrap();
+                        // and to make the source types be producted we just take both.
+                        let lchild = Node::take(&lchild);
+                        let rchild = Node::take(&rchild);
+                        let node = Node::case(&lchild, &rchild).unwrap();
+                        stack.push((lsize + rsize + 7, node));
+                    }
+                    2 => {
+                        // Pair requires both source types be the same. We can make them the same
+                        // by converting one from A to A x _, and the other from B to _ x B.
+                        let drop = Node::drop_(&lchild);
+                        let take = Node::take(&rchild);
+                        let node = Node::pair(&drop, &take).unwrap();
+                        stack.push((lsize + rsize + 3, node));
+                    }
+                    3 => {
+                        // Disconnect is the same as comp except that the lchild source also
+                        // needs to be left-producted by 2^256. Do this with drop.
+                        let lchild = Node::pair(&lchild, &Node::witness(&ctx, None)).unwrap();
+                        let lchild = Node::drop_(&lchild);
+                        let rchild = Node::drop_(&rchild);
+                        let node = Node::disconnect(&lchild, &Some(Arc::clone(&rchild))).unwrap();
+                        stack.push((lsize + rsize + 5, node));
+                    }
+                    _ => break,
+                };
+                assert_eq!(stack.len(), 2);
+            } else {
+                unreachable!()
+            }
+
+            let size_est = stack.iter().map(|(sz, _)| *sz).sum::<usize>();
+            if size_est > MAX_NODES {
+                break;
+            }
+        }
+
+        let last = stack.pop()?;
+        let (size, data) = stack.iter().fold(last, |(acc_sz, acc_node), (sz, node)| {
+            // Just pair everything together, that's simplest.
+            let drop = Node::drop_(&acc_node);
+            let take = Node::take(&node);
+            (acc_sz + sz + 3, Node::pair(&drop, &take).unwrap())
+        });
+
+        // We do a poor approximation of the size of a node. But
+        // we limit the total size above so it doesn't really matter.
+        Some(Sampled {
+            size: size * mem::size_of::<Node>(),
+            data,
         })
     }
 }
