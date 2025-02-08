@@ -3,6 +3,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <cstdio>
+#include <cstdlib> // for getenv
 #include <span.h>
 #include <primitives/transaction.h>
 #include <script/sigcache.h>
@@ -115,22 +116,22 @@ FUZZ_TARGET_INIT(simplicity, initialize_simplicity)
         seed_data_delete(seed_data);
     }
 
-#if 0
-    // 1a. Output everything
-    CSHA256 fnameHasher;
-    fnameHasher.Write(tx_bytes.data(), tx_bytes.size());
+    if (std::getenv("FUZZ_DUMP") != NULL) {
+        // 1a. Output everything
+        CSHA256 fnameHasher;
+        fnameHasher.Write(tx_bytes.data(), tx_bytes.size());
 
-    unsigned char hash[32];
-    fnameHasher.Finalize(hash);
+        unsigned char hash[32];
+        fnameHasher.Finalize(hash);
 
-    std::string fname = "fuzz_dump/" + HexStr(hash);
-    //printf("  OK -- dumping to %s\n", fname.c_str());
-    FILE *fh = fsbridge::fopen(fname.data(), "w");
-    assert(fh != NULL);
+        std::string fname = "fuzz_dump/" + HexStr(hash);
+        //printf("  OK -- dumping to %s\n", fname.c_str());
+        FILE *fh = fsbridge::fopen(fname.data(), "w");
+        assert(fh != NULL);
 
-    assert(fwrite(tx_bytes.data(), 1, tx_bytes.size(), fh) == tx_bytes.size());
-    assert(fclose(fh) == 0);
-#endif
+        assert(fwrite(tx_bytes.data(), 1, tx_bytes.size(), fh) == tx_bytes.size());
+        assert(fclose(fh) == 0);
+    }
 
     // 2. Construct transaction.
     CMutableTransaction mtx;
@@ -212,27 +213,20 @@ FUZZ_TARGET_INIT(simplicity, initialize_simplicity)
                     std::vector<unsigned char> cmr(32, 0);
                     assert(cmr.size() == 32); // fuck C++
                     assert(simplicity_computeCmr(&error, cmr.data(), program.data(), program.size()));
-                    if (error == SIMPLICITY_NO_ERROR) {
-                        const XOnlyPubKey internal{Span{control}.subspan(1, TAPROOT_CONTROL_BASE_SIZE - 1)};
+                    const XOnlyPubKey internal{Span{control}.subspan(1, TAPROOT_CONTROL_BASE_SIZE - 1)};
 
-                        const CScript leaf_script{cmr.begin(), cmr.end()};
-                        const uint256 tapleaf_hash = ComputeTapleafHash(0xbe, leaf_script);
-                        uint256 merkle_root = ComputeTaprootMerkleRoot(control, tapleaf_hash);
-                        auto ret = internal.CreateTapTweak(&merkle_root);
-                        if (ret.has_value()) {
-                            expect_simplicity = true;
-                            //assert(0); // useful for searching for a nontrivial fuzz target
-                            // Just drop the parity; it needs to match the one in the control block,
-                            // but we want to test that logic, so we allow them not to match.
-                            const XOnlyPubKey output_key = ret->first;
-                            if (current[top - 2].size() == 32) {
-                                // FIXME remove this check when we stop using Rust
-                                assert(memcmp(current[top - 2].data(), cmr.data(), 32) == 0);
-                            }
-                            // If we made it here, success (aside from parity maybe)
-                            current[top - 2] = std::move(cmr);
-                            scriptPubKey = CScript() << OP_1 << ToByteVector(output_key);
-                        }
+                    const CScript leaf_script{cmr.begin(), cmr.end()};
+                    const uint256 tapleaf_hash = ComputeTapleafHash(0xbe, leaf_script);
+                    uint256 merkle_root = ComputeTaprootMerkleRoot(control, tapleaf_hash);
+                    auto ret = internal.CreateTapTweak(&merkle_root);
+                    if (ret.has_value()) {
+                        expect_simplicity = (error == SIMPLICITY_NO_ERROR);
+                        // Just drop the parity; it needs to match the one in the control block,
+                        // but we want to test that logic, so we allow them not to match.
+                        const XOnlyPubKey output_key = ret->first;
+                        // If we made it here, success (aside from parity maybe)
+                        current[top - 2] = std::move(cmr);
+                        scriptPubKey = CScript() << OP_1 << ToByteVector(output_key);
                     }
                 }
             }

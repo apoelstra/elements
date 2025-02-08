@@ -15,7 +15,7 @@ use simplicity::node::{
 use simplicity::types;
 use simplicity::Value;
 
-const MAX_VALUE_BITS: usize = 16 * 1024 * 1024; // exceed ubounded max
+const MAX_VALUE_BITS: usize = 1024;
 
 impl Generate for Value {
     fn sample<S: Seeder>(s: &mut S) -> Option<Sampled<Self>> {
@@ -68,7 +68,7 @@ impl Generate for simplicity::FailEntropy {
 }
 
 /// Maximum number of nodes in a WitnessNode before we start scaling back.
-const MAX_NODES: usize = 64 * 64;  /* should be enough to crank type sizes waay up */
+const MAX_NODES: usize = 1024 * 1024;  /* should be enough to crank type sizes waay up */
 
 // You probably don't want to generate this. You probably want to generate
 // a RedeemNode below, which additionally forces the thing to 1-1 and gives

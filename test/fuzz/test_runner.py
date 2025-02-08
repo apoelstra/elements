@@ -260,6 +260,7 @@ def run_once(*, fuzz_pool, corpus, test_list, src_dir, build_dir, use_valgrind):
         args = [
             os.path.join(build_dir, 'src', 'test', 'fuzz', 'fuzz'),
             '-runs=1',
+            '-rss_limit_mb=512000',
             corpus_path,
         ]
         if use_valgrind:
